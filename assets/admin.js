@@ -98,11 +98,12 @@
       const o = await call('alfikr_admin_overview', { p_date: state.date });
       state.overview = o; state.tz = o.timezone; state.company = o.company;
       if (!state.date) state.date = o.today;
+      if (state.tab !== 'today') return; // the admin moved to another tab while this loaded
       renderToday();
       clearInterval(state.timer);
       state.timer = setInterval(async () => {
         if (state.tab !== 'today' || document.hidden) return;
-        try { state.overview = await call('alfikr_admin_overview', { p_date: state.date }); renderToday(true); } catch (e) {}
+        try { const o = await call('alfikr_admin_overview', { p_date: state.date }); state.overview = o; if (state.tab === 'today') renderToday(true); } catch (e) {}
       }, 30000);
     } catch (e) { fail(e); }
   }
@@ -295,7 +296,7 @@
   /* ───────── EMPLOYEES ───────── */
   async function loadEmployees(force) {
     if (!state.list) view(hero('الموظفون', 'إدارة فريق العمل') + skeleton());
-    try { await ensureList(force === true || !state.list); renderEmployees(); } catch (e) { fail(e); }
+    try { await ensureList(force === true || !state.list); if (state.tab === 'employees') renderEmployees(); } catch (e) { fail(e); }
   }
   function renderEmployees() {
     const emps = state.list.employees;
@@ -306,7 +307,7 @@
     const items = list.map((e, i) => `<div class="item tap emp-row" data-id="${e.id}" style="animation-delay:${Math.min(i, 14) * 30}ms">
       <div class="avatar" ${e.active ? '' : 'style="filter:grayscale(1);opacity:.6"'}>${F.esc(F.initials(e.name))}</div>
       <div class="meta"><div class="t">${F.esc(e.name)} ${e.active ? '' : '<span class="pill mute">موقوف</span>'}</div>
-        <div class="s"><span class="num">${F.esc(e.phone || '')}</span>${[e.job_title, e.department].filter(Boolean).length ? ' · ' + F.esc([e.job_title, e.department].filter(Boolean).join(' · ')) : ''}</div></div>
+        <div class="s"><span class="num">${F.esc(e.phone || '')}</span> · 🕒 <span class="num">${e.shift_start}–${e.shift_end}</span>${[e.job_title, e.department].filter(Boolean).length ? ' · ' + F.esc([e.job_title, e.department].filter(Boolean).join(' · ')) : ''}</div></div>
       <button class="pin-chip" data-pin="${e.id}" aria-label="الرمز السري"><span class="tiny muted">الرمز</span> <b class="num">${pinText(e)}</b> ${e.pin ? F.ICONS.eye : ''}</button>
       <button class="icon-btn sm" data-reset="${e.id}" aria-label="إعادة تعيين الرمز السري" title="إعادة تعيين الرمز السري">${F.ICONS.key}</button>
     </div>`).join('');
@@ -320,7 +321,7 @@
     bindRefresh(() => loadEmployees(true));
     const eq = $('#eq');
     eq.oninput = () => { state.empQ = eq.value; const p = eq.selectionStart; renderEmployees(); const n = $('#eq'); n.focus(); n.setSelectionRange(p, p); };
-    document.querySelectorAll('.item[data-id]').forEach((it) => it.onclick = () => employeeForm(emps.find((e) => e.id === it.dataset.id)));
+    document.querySelectorAll('.item[data-id]').forEach((it) => it.onclick = () => hoursSheet(emps.find((e) => e.id === it.dataset.id)));
     document.querySelectorAll('[data-pin]').forEach((b) => b.onclick = (ev) => {
       ev.stopPropagation();
       const e = emps.find((x) => x.id === b.dataset.pin);
@@ -332,6 +333,60 @@
     $('#togglePins').onclick = () => { state.showPins = !state.showPins; state.shownPin = null; renderEmployees(); };
     const ab = $('#goAddEmp'); if (ab) ab.onclick = () => employeeForm();
     addFab(() => employeeForm());
+  }
+
+  // Tapping an employee: change their working hours (with presets), or jump to other actions.
+  const SHIFT_PRESETS = [['07:00', '15:00'], ['08:00', '16:00'], ['08:00', '17:00'], ['09:00', '17:00'], ['09:00', '18:00']];
+  function shiftLength(a, b) {
+    const toMin = (x) => { const [h, m] = String(x || '0:0').split(':').map(Number); return h * 60 + (m || 0); };
+    const mins = ((toMin(b) - toMin(a)) + 1440) % 1440 || 1440;
+    return F.fmtDuration(mins * 60000);
+  }
+  function hoursSheet(e) {
+    F.sheet(`<div class="row" style="margin-bottom:16px"><div class="avatar" style="background:color-mix(in srgb,var(--brand) 12%,transparent);color:var(--brand);border:0">${F.esc(F.initials(e.name))}</div>
+      <div style="flex:1"><h3 style="margin:0">${F.esc(e.name)}</h3><div class="muted small num">${F.esc(e.phone || '')}</div></div></div>
+      <div class="hours-card">
+        <div class="row between"><b>أوقات الدوام</b><span class="pill info" id="hLen">${shiftLength(e.shift_start, e.shift_end)}</span></div>
+        <div class="form-row" style="margin-top:12px">
+          <label class="field"><span>بداية الدوام</span><input class="input time-big" type="time" id="hStart" value="${e.shift_start}"></label>
+          <label class="field"><span>نهاية الدوام</span><input class="input time-big" type="time" id="hEnd" value="${e.shift_end}"></label>
+        </div>
+        <div class="tiny muted" style="margin:-4px 0 8px">اختيار سريع</div>
+        <div class="chips" id="hPresets">${SHIFT_PRESETS.map(([a, b]) => `<button type="button" class="chip ${a === e.shift_start && b === e.shift_end ? 'active' : ''}" data-a="${a}" data-b="${b}"><span class="num">${a}–${b}</span></button>`).join('')}</div>
+        <p class="tiny muted" style="margin:8px 0 0">يُحسب التأخير من بداية الدوام بعد مهلة التأخير المحددة في الإعدادات.</p>
+      </div>
+      <button class="btn block" id="hSave" style="margin-top:16px">حفظ أوقات الدوام</button>
+      <div class="grid-2" style="margin-top:10px">
+        <button class="btn ghost" id="hEdit">${F.ICONS.user} تعديل البيانات</button>
+        <button class="btn ghost" id="hPin">${F.ICONS.key} إعادة تعيين الرمز</button>
+      </div>
+      <button class="btn ghost block" data-close style="margin-top:10px">إغلاق</button>`, (el, close) => {
+      const start = $('#hStart', el), end = $('#hEnd', el), len = $('#hLen', el);
+      const sync = () => {
+        len.textContent = shiftLength(start.value, end.value);
+        el.querySelectorAll('#hPresets .chip').forEach((c) => c.classList.toggle('active', c.dataset.a === start.value && c.dataset.b === end.value));
+      };
+      start.oninput = end.oninput = sync;
+      el.querySelectorAll('#hPresets .chip').forEach((c) => c.onclick = () => { start.value = c.dataset.a; end.value = c.dataset.b; sync(); F.vibrate(8); });
+      $('#hEdit', el).onclick = () => { close(); setTimeout(() => employeeForm(e), 260); };
+      $('#hPin', el).onclick = () => { close(); setTimeout(() => resetPin(e), 260); };
+      $('#hSave', el).onclick = async (ev) => {
+        if (!start.value || !end.value) return F.toast(F.errorText({ code: 'missing_fields' }), 'bad');
+        const btn = ev.currentTarget;
+        F.busy(btn, true);
+        try {
+          await call('alfikr_admin_save_employee', { p: {
+            id: e.id, name: e.name, phone: e.phone, code: e.code, job_title: e.job_title || '', department: e.department || '',
+            active: e.active, shift_start: start.value, shift_end: end.value,
+          } });
+          e.shift_start = start.value; e.shift_end = end.value;
+          close();
+          F.toast('تم حفظ أوقات الدوام', 'ok');
+          state.overview = null;
+          if (state.tab === 'employees') renderEmployees();
+        } catch (err) { fail(err); F.busy(btn, false); }
+      };
+    });
   }
 
   // Share sign-in details (WhatsApp / share sheet).
@@ -440,7 +495,7 @@
       if (!state.prints || force) view(hero('كل البصمات', 'كل بصمة مع الصورة والموقع') + skeleton());
       const res = await call('alfikr_admin_punches', { p_from: state.recFrom || null, p_to: state.recTo || null, p_employee: state.recEmp || null, p_limit: 40 });
       state.prints = { items: res.items, next: res.next_before };
-      renderPrints();
+      if (state.tab === 'records') renderPrints();
     } catch (e) { fail(e); }
   }
   async function moreprints(btn) {
@@ -536,7 +591,7 @@
 
   /* ───────── SETTINGS ───────── */
   async function loadSettings(force) {
-    try { await ensureList(force === true); renderSettings(); } catch (e) { fail(e); }
+    try { await ensureList(force === true); if (state.tab === 'settings') renderSettings(); } catch (e) { fail(e); }
   }
   function renderSettings() {
     const s = state.list.settings;

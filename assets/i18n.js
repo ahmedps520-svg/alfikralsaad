@@ -251,6 +251,15 @@
     'النوع': 'Type',
     'الدقة (م)': 'Accuracy (m)',
 
+    // working hours sheet
+    'أوقات الدوام': 'Working hours',
+    'اختيار سريع': 'Quick pick',
+    'يُحسب التأخير من بداية الدوام بعد مهلة التأخير المحددة في الإعدادات.': 'Lateness counts from the shift start, after the grace minutes set in Settings.',
+    'حفظ أوقات الدوام': 'Save working hours',
+    'تعديل البيانات': 'Edit details',
+    'إعادة تعيين الرمز': 'Reset PIN',
+    'تم حفظ أوقات الدوام': 'Working hours saved',
+
     // CSV headers
     'التاريخ': 'Date',
     'الاسم': 'Name',

@@ -95,3 +95,7 @@
 .big-photo { width: 100%; max-width: 420px; display: block; margin: 0 auto; border-radius: 20px; box-shadow: var(--shadow); animation: pop .45s cubic-bezier(.2, 1.4, .4, 1) both; }
 .map-link { font-weight: 600; text-decoration: none; }
 .proof-meta .pill { padding: 2px 8px; }
+
+/* working hours sheet */
+.hours-card { background: var(--surface-2); border: 1px solid var(--line); border-radius: 18px; padding: 16px; animation: pop .45s cubic-bezier(.2, 1.4, .4, 1) both; }
+.time-big { font-size: 17px; font-weight: 700; text-align: center; padding: 14px 6px; background: var(--surface); }
