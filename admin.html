@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>الفكر السعد · لوحة التحكم</title>
+  <meta name="description" content="لوحة تحكم الموارد البشرية — الفكر السعد">
+  <meta name="theme-color" content="#0f766e">
+  <meta name="robots" content="noindex">
+  <link rel="icon" href="assets/logo.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="assets/logo.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="assets/style.css">
+  <link rel="stylesheet" href="assets/admin.css">
+</head>
+<body class="admin-body">
+  <section id="login" class="auth hidden">
+    <div class="orb" style="width:300px;height:300px;top:-90px;left:-110px"></div>
+    <div class="orb" style="width:200px;height:200px;top:30%;right:-80px;animation-delay:-4s"></div>
+    <div class="auth-head">
+      <img class="logo" src="assets/logo.svg" alt="">
+      <h1>لوحة التحكم</h1>
+      <p>إدارة الحضور والموظفين — الفكر السعد</p>
+    </div>
+    <form class="auth-card" id="loginForm">
+      <h2>دخول المسؤول</h2>
+      <p class="muted small" style="margin:0 0 18px">أدخل كلمة مرور لوحة التحكم</p>
+      <input type="text" name="username" value="admin" autocomplete="username" hidden>
+      <label class="field"><span>كلمة المرور</span>
+        <input class="input ltr" id="password" type="password" autocomplete="current-password" required>
+      </label>
+      <button class="btn block" type="submit" id="loginBtn">دخول</button>
+      <p class="center tiny muted" style="margin:18px 0 0"><a href="./">تطبيق الموظفين ←</a></p>
+    </form>
+  </section>
+
+  <main id="app" class="app admin hidden"><div id="view"></div></main>
+
+  <nav class="tabbar hidden" id="tabbar" aria-label="التنقل">
+    <div class="tabbar-inner">
+      <button class="tab active" data-tab="today"><span data-icon="chart"></span>اليوم</button>
+      <button class="tab" data-tab="employees"><span data-icon="users"></span>الموظفون</button>
+      <button class="tab" data-tab="records"><span data-icon="history"></span>السجلات</button>
+      <button class="tab" data-tab="branches"><span data-icon="pin"></span>الفروع</button>
+      <button class="tab" data-tab="settings"><span data-icon="gear"></span>الإعدادات</button>
+    </div>
+  </nav>
+
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs><linearGradient id="ringGrad" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#2dd4bf"/><stop offset="1" stop-color="#0f766e"/></linearGradient></defs>
+  </svg>
+
+  <script src="assets/core.js"></script>
+  <script src="assets/admin.js"></script>
+</body>
+</html>

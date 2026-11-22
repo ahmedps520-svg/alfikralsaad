@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>الفكر السعد · الحضور</title>
+  <meta name="description" content="تطبيق الفكر السعد لتسجيل الحضور والانصراف">
+  <meta name="theme-color" content="#0f766e">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="الفكر السعد">
+  <link rel="icon" href="assets/logo.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="assets/logo.svg">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="assets/style.css">
+  <link rel="stylesheet" href="assets/app.css">
+</head>
+<body>
+  <!-- Login -->
+  <section id="login" class="auth hidden">
+    <div class="orb" style="width:300px;height:300px;top:-90px;left:-110px"></div>
+    <div class="orb" style="width:200px;height:200px;top:30%;right:-80px;animation-delay:-4s"></div>
+    <div class="auth-head">
+      <img class="logo" src="assets/logo.svg" alt="">
+      <h1>الفكر السعد</h1>
+      <p>سجّل حضورك بلمسة واحدة</p>
+    </div>
+    <form class="auth-card" id="loginForm" autocomplete="on">
+      <h2>تسجيل الدخول</h2>
+      <p class="muted small" style="margin:0 0 18px">أدخل رقمك الوظيفي والرمز السري الذي زوّدك به المسؤول</p>
+      <label class="field"><span>الرقم الوظيفي</span>
+        <input class="input ltr" id="code" name="username" inputmode="numeric" autocomplete="username" placeholder="مثال: 1001" required>
+      </label>
+      <label class="field"><span>الرمز السري</span>
+        <input class="input pin-input" id="pin" name="password" type="password" inputmode="numeric" autocomplete="current-password" maxlength="8" placeholder="••••" required>
+      </label>
+      <button class="btn block" type="submit" id="loginBtn">دخول</button>
+      <p class="center tiny muted" style="margin:18px 0 0">هل أنت مسؤول؟ <a href="admin.html">لوحة التحكم</a></p>
+    </form>
+  </section>
+
+  <!-- App -->
+  <main id="app" class="app hidden">
+    <div id="view"></div>
+  </main>
+  <nav class="tabbar hidden" id="tabbar" aria-label="التنقل">
+    <div class="tabbar-inner">
+      <button class="tab active" data-tab="home"><span data-icon="home"></span>الرئيسية</button>
+      <button class="tab" data-tab="history"><span data-icon="history"></span>سجلي</button>
+      <button class="tab" data-tab="profile"><span data-icon="user"></span>حسابي</button>
+    </div>
+  </nav>
+
+  <script src="assets/core.js"></script>
+  <script src="assets/app.js"></script>
+</body>
+</html>
