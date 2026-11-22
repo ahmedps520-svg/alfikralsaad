@@ -3,7 +3,9 @@
 // Tables are locked with row-level security (no policies), so this function is the
 // only way in. Employees sign in with phone number + PIN. Every check-in/out must carry
 // a live selfie (stored in the private `selfies` bucket) and the phone's GPS position,
-// so the admin can see who checked in, where, and when. Employees can work anywhere.
+// so the admin can see who checked in, where, and when. Employees can work anywhere and may
+// check in/out several times a day (e.g. moving between sites); every print is kept in
+// `punches`, and `attendance` holds the daily summary.
 
 const PBKDF2_ITER = 120000;
 const MAX_PHOTO_BYTES = 600 * 1024;
@@ -90,6 +92,7 @@ function makeDb(ctx) {
     insert: async (t, row) => { const r = await req('POST', t, row, 'return=representation'); return Array.isArray(r) ? r[0] : r; },
     update: (t, query, patch) => req('PATCH', `${t}?${query}`, patch, 'return=representation'),
     remove: (t, query) => req('DELETE', `${t}?${query}`),
+    env: ctx.env,
     async upload(bucket, path, bytes, type) {
       const res = await fetch(`${ctx.env.FORGEBASE_URL}/storage/v1/object/${bucket}/${path}`, {
         method: 'POST', headers: { apikey: key, authorization: `Bearer ${key}`, 'content-type': type, 'x-upsert': 'true' }, body: bytes,
@@ -128,6 +131,30 @@ function decodePhoto(v) {
   if (!isJpeg && !isWebp) throw new Fail('photo_required');
   return { bytes, type: isWebp ? 'image/webp' : 'image/jpeg', ext: isWebp ? 'webp' : 'jpg' };
 }
+
+// PINs are hashed for sign-in AND encrypted (AES-GCM, key in the PIN_KEY secret) so the admin can view them.
+let pinKeyPromise = null;
+function pinKey(db) {
+  if (!db.env.PIN_KEY) return Promise.resolve(null);
+  if (!pinKeyPromise) pinKeyPromise = crypto.subtle.importKey('raw', Buffer.from(db.env.PIN_KEY, 'base64'), 'AES-GCM', false, ['encrypt', 'decrypt']);
+  return pinKeyPromise;
+}
+async function encryptPin(db, pin) {
+  const key = await pinKey(db);
+  if (!key) return null;
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, enc.encode(pin));
+  return `v1:${b64(iv)}:${b64(ct)}`;
+}
+async function decryptPin(db, stored) {
+  try {
+    const key = await pinKey(db);
+    if (!key || !stored) return null;
+    const [, iv, ct] = stored.split(':');
+    return new TextDecoder().decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: Buffer.from(iv, 'base64') }, key, Buffer.from(ct, 'base64')));
+  } catch { return null; }
+}
+const randomPin = () => String(1000 + (crypto.getRandomValues(new Uint32Array(1))[0] % 9000));
 
 // Settings rarely change, so each running instance keeps them for 30 seconds.
 let settingsCache = null;
@@ -177,9 +204,18 @@ function empOut(e) {
 async function recordOut(db, r, withPhotos = true) {
   const [inUrl, outUrl] = withPhotos ? await Promise.all([db.signed('selfies', r.in_photo), db.signed('selfies', r.out_photo)]) : [null, null];
   return {
-    attendance_id: r.id, check_in: r.check_in, check_out: r.check_out,
+    attendance_id: r.id, check_in: r.check_in, check_out: r.check_out, last_in: r.last_in, worked_minutes: Number(r.worked_minutes || 0),
     in_lat: r.in_lat, in_lng: r.in_lng, in_accuracy: r.in_accuracy, in_site: r.in_site, in_photo_url: inUrl,
     out_lat: r.out_lat, out_lng: r.out_lng, out_accuracy: r.out_accuracy, out_site: r.out_site, out_photo_url: outUrl,
+  };
+}
+
+// One print (check-in or check-out) with a signed URL for its selfie.
+async function punchOut(db, p, emp) {
+  return {
+    id: p.id, type: p.type, at: p.at, work_date: p.work_date, lat: p.lat, lng: p.lng, accuracy: p.accuracy, site: p.site,
+    photo_url: await db.signed('selfies', p.photo),
+    employee_id: p.employee_id, name: emp ? emp.name : '—', phone: emp ? emp.phone : null,
   };
 }
 
@@ -206,8 +242,10 @@ const actions = {
   async emp_me(db, a) {
     const [e, s] = await Promise.all([requireEmployee(db, a.p_token), settings(db)]);
     const today = localParts(s.timezone).date;
-    const hist = await db.select('attendance',
-      `employee_id=eq.${q(e.id)}&work_date=gt.${addDays(today, -31)}&select=work_date,check_in,check_out,status,in_site,out_site&order=work_date.desc`);
+    const [hist, prints] = await Promise.all([
+      db.select('attendance', `employee_id=eq.${q(e.id)}&work_date=gt.${addDays(today, -31)}&select=work_date,check_in,check_out,last_in,worked_minutes,status,in_site,out_site&order=work_date.desc`),
+      db.select('punches', `employee_id=eq.${q(e.id)}&work_date=eq.${today}&select=type,at,site&order=at.asc`),
+    ]);
     const sites = [];
     hist.forEach((h) => [h.in_site, h.out_site].forEach((x) => { if (x && !sites.includes(x) && sites.length < 6) sites.push(x); }));
     return {
@@ -215,6 +253,7 @@ const actions = {
       company: s.company_name, timezone: s.timezone, grace_minutes: Number(s.grace_minutes),
       server_now: nowIso(),
       today: hist.find((h) => h.work_date === today) || null,
+      today_punches: prints,
       history: hist,
       recent_sites: sites,
     };
@@ -235,38 +274,50 @@ const actions = {
 
     const local = localParts(s.timezone);
     const rec = await db.one('attendance', `employee_id=eq.${q(e.id)}&work_date=eq.${local.date}&select=*`);
-    if (type === 'in' && rec && rec.check_in) throw new Fail('already_checked_in');
-    if (type === 'out' && (!rec || !rec.check_in)) throw new Fail('not_checked_in');
-    if (type === 'out' && rec.check_out) throw new Fail('already_checked_out');
+    const isIn = !!(rec && rec.last_in);
+    if (type === 'in' && isIn) throw new Fail('already_checked_in');
+    if (type === 'out' && !isIn) throw new Fail('not_checked_in');
 
+    const at = nowIso();
     const path = `${e.id}/${local.date}-${type}-${hex(crypto.getRandomValues(new Uint8Array(4)))}.${photo.ext}`;
     const accuracy = acc !== null && isFinite(acc) ? Math.round(acc) : null;
-    // The photo upload and the record write run in parallel; a failed upload undoes the record.
-    const upload = db.upload('selfies', path, photo.bytes, photo.type);
+    const punchId = uuid();
+    // Photo upload and the print record run in parallel; if either fails, both are undone.
+    const [up, pr] = await Promise.allSettled([
+      db.upload('selfies', path, photo.bytes, photo.type),
+      db.insert('punches', { id: punchId, employee_id: e.id, work_date: local.date, type, at, lat, lng, accuracy, site, photo: path }),
+    ]);
+    if (up.status === 'rejected' || pr.status === 'rejected') {
+      if (pr.status === 'fulfilled') await db.remove('punches', `id=eq.${q(punchId)}`);
+      if (up.status === 'fulfilled') db.removeFiles('selfies', [path]);
+      throw (up.status === 'rejected' ? up.reason : pr.reason);
+    }
 
-    if (type === 'in') {
-      const status = local.minutes > hmToMin(e.shift_start) + Number(s.grace_minutes) ? 'late' : 'present';
-      const id = uuid();
-      const write = db.insert('attendance', {
-        id, employee_id: e.id, work_date: local.date, check_in: nowIso(),
-        in_lat: lat, in_lng: lng, in_accuracy: accuracy, in_site: site, in_photo: path, status,
-      }).catch((err) => { if (err.status === 409) throw new Fail('already_checked_in'); throw err; });
-      const [up, wr] = await Promise.allSettled([upload, write]);
-      if (wr.status === 'rejected') { if (up.status === 'fulfilled') db.removeFiles('selfies', [path]); throw wr.reason; }
-      if (up.status === 'rejected') { await db.remove('attendance', `id=eq.${q(id)}`); throw up.reason; }
-      return { ok: true, status: wr.value.status, check_in: wr.value.check_in, check_out: null };
+    let row;
+    try {
+      if (type === 'in' && !rec) {
+        const status = local.minutes > hmToMin(e.shift_start) + Number(s.grace_minutes) ? 'late' : 'present';
+        row = await db.insert('attendance', {
+          id: uuid(), employee_id: e.id, work_date: local.date, check_in: at, last_in: at, worked_minutes: 0, status,
+          in_lat: lat, in_lng: lng, in_accuracy: accuracy, in_site: site, in_photo: path,
+        });
+      } else if (type === 'in') {
+        // back at work later the same day (e.g. at another site)
+        [row] = await db.update('attendance', `id=eq.${q(rec.id)}`, { last_in: at, check_out: null });
+      } else {
+        const minutes = Math.max(0, Math.round((Date.parse(at) - Date.parse(rec.last_in)) / 60000));
+        [row] = await db.update('attendance', `id=eq.${q(rec.id)}`, {
+          check_out: at, last_in: null, worked_minutes: Number(rec.worked_minutes || 0) + minutes,
+          out_lat: lat, out_lng: lng, out_accuracy: accuracy, out_site: site, out_photo: path,
+        });
+      }
+    } catch (err) {
+      await db.remove('punches', `id=eq.${q(punchId)}`);
+      db.removeFiles('selfies', [path]);
+      if (err.status === 409) throw new Fail('already_checked_in');
+      throw err;
     }
-    const write = db.update('attendance', `id=eq.${q(rec.id)}`, {
-      check_out: nowIso(), out_lat: lat, out_lng: lng, out_accuracy: accuracy, out_site: site, out_photo: path,
-    });
-    const [up, wr] = await Promise.allSettled([upload, write]);
-    if (wr.status === 'rejected') { if (up.status === 'fulfilled') db.removeFiles('selfies', [path]); throw wr.reason; }
-    if (up.status === 'rejected') {
-      await db.update('attendance', `id=eq.${q(rec.id)}`, { check_out: null, out_lat: null, out_lng: null, out_accuracy: null, out_site: null, out_photo: null });
-      throw up.reason;
-    }
-    const row = wr.value[0];
-    return { ok: true, status: row.status, check_in: row.check_in, check_out: row.check_out };
+    return { ok: true, type, at, status: row.status, check_in: row.check_in, check_out: row.check_out, worked_minutes: Number(row.worked_minutes || 0) };
   },
 
   /* ───────── admin actions ───────── */
@@ -317,7 +368,7 @@ const actions = {
     // Data is fetched alongside the session check, but nothing is returned unless the check passes.
     const [, emps, s] = await Promise.all([requireAdmin(db, a.p_token), db.select('employees', 'select=*&order=created_at.asc'), settings(db)]);
     return {
-      employees: emps.map(empOut),
+      employees: await Promise.all(emps.map(async (e) => ({ ...empOut(e), pin: await decryptPin(db, e.pin_enc) }))),
       settings: { company_name: s.company_name, timezone: s.timezone, grace_minutes: Number(s.grace_minutes) },
     };
   },
@@ -347,7 +398,7 @@ const actions = {
       shift_end: validHm(p.shift_end) ? p.shift_end.slice(0, 5) : '16:00',
       active: p.active === false || p.active === 'false' ? 0 : 1,
     };
-    if (pin !== null) row.pin_hash = await hashSecret(pin);
+    if (pin !== null) { row.pin_hash = await hashSecret(pin); row.pin_enc = await encryptPin(db, pin); }
     let saved;
     if (!id) {
       saved = await db.insert('employees', { id: uuid(), created_at: nowIso(), ...row });
@@ -356,16 +407,30 @@ const actions = {
       if (!saved) throw new Fail('not_found', 404);
       if (pin !== null || !row.active) await db.remove('sessions', `employee_id=eq.${q(id)}`);
     }
-    return empOut(saved);
+    return { ...empOut(saved), pin: pin !== null ? pin : await decryptPin(db, saved.pin_enc) };
+  },
+
+  // Sets a new PIN (the given one, or a random 4-digit PIN) and signs the employee out everywhere.
+  async admin_reset_pin(db, a) {
+    await requireAdmin(db, a.p_token);
+    const id = str(a.p_id, 64);
+    if (!id) throw new Fail('missing_fields');
+    const pin = str(a.p_pin, 20) || randomPin();
+    if (!/^\d{4,8}$/.test(pin)) throw new Fail('bad_pin');
+    const [saved] = await db.update('employees', `id=eq.${q(id)}`, { pin_hash: await hashSecret(pin), pin_enc: await encryptPin(db, pin) });
+    if (!saved) throw new Fail('not_found', 404);
+    await db.remove('sessions', `employee_id=eq.${q(id)}`);
+    return { ok: true, pin };
   },
 
   async admin_delete_employee(db, a) {
     await requireAdmin(db, a.p_token);
     const id = str(a.p_id, 64);
     if (!id) throw new Fail('missing_fields');
-    const recs = await db.select('attendance', `employee_id=eq.${q(id)}&select=in_photo,out_photo`);
-    await db.removeFiles('selfies', recs.flatMap((r) => [r.in_photo, r.out_photo]).filter(Boolean));
+    const prints = await db.select('punches', `employee_id=eq.${q(id)}&select=photo`);
+    await db.removeFiles('selfies', prints.map((r) => r.photo).filter(Boolean));
     await db.remove('sessions', `employee_id=eq.${q(id)}`);
+    await db.remove('punches', `employee_id=eq.${q(id)}`);
     await db.remove('attendance', `employee_id=eq.${q(id)}`);
     await db.remove('employees', `id=eq.${q(id)}`);
     return { ok: true };
@@ -384,12 +449,31 @@ const actions = {
     }));
   },
 
+  // Every print ever (newest first), with photo and location. Page with p_before (the last `at` seen).
+  async admin_punches(db, a) {
+    await requireAdmin(db, a.p_token);
+    const limit = Math.min(100, Math.max(1, Math.round(Number(a.p_limit) || 40)));
+    let query = `select=*&order=at.desc&limit=${limit}`;
+    if (validDate(a.p_from)) query += `&work_date=gte.${a.p_from}`;
+    if (validDate(a.p_to)) query += `&work_date=lte.${a.p_to}`;
+    if (a.p_employee) query += `&employee_id=eq.${q(String(a.p_employee))}`;
+    if (a.p_before && /^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/.test(a.p_before)) query += `&at=lt.${q(a.p_before)}`;
+    const [prints, emps] = await Promise.all([db.select('punches', query), db.select('employees', 'select=id,name,phone')]);
+    const items = await Promise.all(prints.map((p) => punchOut(db, p, emps.find((e) => e.id === p.employee_id))));
+    return { items, next_before: prints.length === limit ? prints[prints.length - 1].at : null };
+  },
+
   async admin_delete_attendance(db, a) {
     await requireAdmin(db, a.p_token);
     const id = str(a.p_id, 64);
     if (!id) throw new Fail('missing_fields');
-    const r = await db.one('attendance', `id=eq.${q(id)}&select=in_photo,out_photo`);
-    if (r) await db.removeFiles('selfies', [r.in_photo, r.out_photo].filter(Boolean));
+    const r = await db.one('attendance', `id=eq.${q(id)}&select=employee_id,work_date`);
+    if (r) {
+      const day = `employee_id=eq.${q(r.employee_id)}&work_date=eq.${r.work_date}`;
+      const prints = await db.select('punches', `${day}&select=photo`);
+      await db.removeFiles('selfies', prints.map((x) => x.photo).filter(Boolean));
+      await db.remove('punches', day);
+    }
     await db.remove('attendance', `id=eq.${q(id)}`);
     return { ok: true };
   },

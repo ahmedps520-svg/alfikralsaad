@@ -109,7 +109,7 @@
 
   function bucket(r) {
     if (!r.check_in) return 'absent';
-    if (r.check_out) return 'out';
+    if (!r.last_in) return 'out';
     return r.status;
   }
 
@@ -118,17 +118,17 @@
     const total = rows.length;
     const present = rows.filter((r) => r.check_in).length;
     const late = rows.filter((r) => r.status === 'late').length;
-    const out = rows.filter((r) => r.check_out).length;
+    const out = rows.filter((r) => r.check_in && !r.last_in).length;
     const absent = total - present;
     const pct = total ? Math.round((present / total) * 100) : 0;
     const C = 2 * Math.PI * 48;
     const isToday = state.date === o.today;
-    const counts = { all: total, in: present - out, late, absent, out };
+    const counts = { all: total, in: rows.filter((r) => r.last_in).length, late, absent, out };
 
     const q = state.q.trim().toLowerCase();
     const filtered = rows.filter((r) => {
       const b = bucket(r);
-      if (state.filter === 'in' && !(r.check_in && !r.check_out)) return false;
+      if (state.filter === 'in' && !r.last_in) return false;
       if (state.filter === 'late' && r.status !== 'late') return false;
       if (state.filter === 'absent' && b !== 'absent') return false;
       if (state.filter === 'out' && b !== 'out') return false;
@@ -154,7 +154,7 @@
         ${avatar(r)}
         <div class="meta"><div class="t">${F.esc(r.name)}</div>
           <div class="s">${r.in_site ? '📍 ' + F.esc(r.in_site) : F.esc(r.department || r.phone || '')}</div></div>
-        <div class="times">${r.check_in ? `حضور <b class="num">${F.fmtTime(r.check_in, tz)}</b><br>انصراف <b class="num">${F.fmtTime(r.check_out, tz)}</b>` : `<span class="num">${r.shift_start}</span>`}</div>
+        <div class="times">${r.check_in ? `حضور <b class="num">${F.fmtTime(r.check_in, tz)}</b><br>انصراف <b class="num">${r.last_in ? '—' : F.fmtTime(r.check_out, tz)}</b>` : `<span class="num">${r.shift_start}</span>`}</div>
         ${pill}
       </div>`;
     }).join('');
@@ -250,33 +250,46 @@
     const u = photo(r, 'in');
     return u ? `<div class="avatar photo"><img src="${F.esc(u)}" alt="" loading="lazy"></div>` : `<div class="avatar">${F.esc(F.initials(r.name))}</div>`;
   }
-  // The proof for one check-in/out: live selfie, time, site, GPS accuracy and a map link.
-  function evidence(r) {
+  const workedMs = (r) => Number(r.worked_minutes || 0) * 60000 + (r.last_in ? Math.max(0, Date.now() - new Date(r.last_in)) : 0);
+  const mapLink = (lat, lng, label) => (lat != null ? `<a class="tiny map-link" target="_blank" rel="noopener" href="https://maps.google.com/?q=${lat},${lng}">${label || 'الخريطة ↗'}</a>` : '');
+  const typePill = (t) => `<span class="pill ${t === 'in' ? 'ok' : 'out'}">${t === 'in' ? 'حضور' : 'انصراف'}</span>`;
+
+  // One print as a card: live selfie, type, time, site, GPS accuracy and a map link.
+  function printCard(p, withDate) {
     const tz = state.tz;
-    const side = (kind, label) => {
-      const t = r[kind === 'in' ? 'check_in' : 'check_out'];
-      if (!t) return `<div class="proof empty-proof"><div class="proof-img"><span>${label}<br>لم يُسجّل</span></div></div>`;
-      const u = photo(r, kind), lat = r[kind + '_lat'], lng = r[kind + '_lng'], acc = r[kind + '_accuracy'], site = r[kind + '_site'];
-      return `<div class="proof">
-        ${u ? `<a class="proof-img" href="${F.esc(u)}" target="_blank" rel="noopener"><img src="${F.esc(u)}" alt="صورة ${label}"></a>` : '<div class="proof-img"><span>لا توجد صورة</span></div>'}
-        <div class="proof-meta"><b>${label}</b> <span class="num">${F.fmtTime(t, tz)}</span>
-          ${site ? `<div class="tiny">📍 ${F.esc(site)}</div>` : ''}
-          ${lat != null ? `<a class="tiny" target="_blank" rel="noopener" href="https://maps.google.com/?q=${lat},${lng}">الخريطة ↗</a>${acc != null ? ` <span class="tiny muted">±${acc} م</span>` : ''}` : ''}
-        </div></div>`;
-    };
-    return `<div class="proofs">${side('in', 'الحضور')}${side('out', 'الانصراف')}</div>`;
+    return `<div class="proof">
+      ${p.photo_url ? `<a class="proof-img" href="${F.esc(p.photo_url)}" target="_blank" rel="noopener"><img src="${F.esc(p.photo_url)}" alt="${p.type === 'in' ? 'صورة الحضور' : 'صورة الانصراف'}" loading="lazy"></a>` : '<div class="proof-img"><span>لا توجد صورة</span></div>'}
+      <div class="proof-meta">${typePill(p.type)} <span class="num bold">${F.fmtTime(p.at, tz)}</span>
+        ${withDate ? `<div class="tiny muted">${F.fmtDate(p.work_date, { year: 'numeric' })}</div>` : ''}
+        ${p.site ? `<div class="tiny">📍 ${F.esc(p.site)}</div>` : ''}
+        <div>${mapLink(p.lat, p.lng)}${p.accuracy != null ? ` <span class="tiny muted">±${p.accuracy} م</span>` : ''}</div>
+      </div></div>`;
   }
 
+  // Day detail: every print of this employee on the chosen day.
   function dayDetail(r) {
-    const dur = r.check_in && r.check_out ? F.fmtDuration(new Date(r.check_out) - new Date(r.check_in)) : '—';
     F.sheet(`<div class="row" style="margin-bottom:14px">${avatar(r)}
       <div style="flex:1"><h3 style="margin:0">${F.esc(r.name)}</h3><div class="muted small">${F.esc(r.job_title || '')} <span class="code-tag num">${F.esc(r.phone || r.code)}</span></div></div>${F.statusPill(r.check_in ? r.status : 'absent')}</div>
-      ${r.check_in ? evidence(r) : '<div class="card empty" style="box-shadow:none"><div class="ico">🕒</div>لم يسجّل حضوره في هذا اليوم</div>'}
+      <div id="dayPrints">${r.check_in ? '<div class="proofs"><div class="skel" style="aspect-ratio:1"></div><div class="skel" style="aspect-ratio:1"></div></div>' : '<div class="card empty" style="box-shadow:none"><div class="ico">🕒</div>لم يسجّل حضوره في هذا اليوم</div>'}</div>
       <div class="card" style="box-shadow:none;margin-top:14px">
         <div class="kv"><span class="k">الدوام</span><span class="v num">${r.shift_start} – ${r.shift_end}</span></div>
-        <div class="kv"><span class="k">مدة العمل</span><span class="v">${dur}</span></div>
+        <div class="kv"><span class="k">مدة العمل</span><span class="v">${r.check_in ? F.fmtDuration(workedMs(r)) : '—'}</span></div>
       </div>
-      <button class="btn ghost block" data-close style="margin-top:14px">إغلاق</button>`);
+      ${r.attendance_id ? `<button class="btn soft-danger block" id="dayDel" style="margin-top:14px">${F.ICONS.trash} حذف بصمات هذا اليوم</button>` : ''}
+      <button class="btn ghost block" data-close style="margin-top:10px">إغلاق</button>`, async (el, close) => {
+      const del = $('#dayDel', el);
+      if (del) del.onclick = async () => {
+        close();
+        if (!(await F.confirmSheet('حذف بصمات هذا اليوم', 'سيتم حذف كل بصمات وصور هذا الموظف لهذا اليوم، ويمكنه التسجيل من جديد.', 'حذف'))) return;
+        try { await call('alfikr_admin_delete_attendance', { p_id: r.attendance_id }); F.toast('تم حذف السجل', 'ok'); state.prints = null; loadToday(true); } catch (e) { fail(e); }
+      };
+      if (!r.check_in) return;
+      try {
+        const res = await call('alfikr_admin_punches', { p_from: state.date, p_to: state.date, p_employee: r.id, p_limit: 100 });
+        const box = $('#dayPrints', el);
+        if (box) box.innerHTML = `<div class="proofs">${res.items.slice().reverse().map((p) => printCard(p)).join('')}</div>`;
+      } catch (e) { fail(e); }
+    });
   }
 
   /* ───────── EMPLOYEES ───────── */
@@ -289,23 +302,77 @@
     const q = state.empQ.trim().toLowerCase();
     const list = emps.filter((e) => !q || (e.name + ' ' + e.code + ' ' + (e.phone || '') + ' ' + (e.department || '') + ' ' + (e.job_title || '')).toLowerCase().includes(q));
     const active = emps.filter((e) => e.active).length;
-    const items = list.map((e, i) => `<div class="item tap" data-id="${e.id}" style="animation-delay:${Math.min(i, 14) * 30}ms">
+    const pinText = (e) => (e.pin ? (state.showPins || state.shownPin === e.id ? e.pin : '••••') : '—');
+    const items = list.map((e, i) => `<div class="item tap emp-row" data-id="${e.id}" style="animation-delay:${Math.min(i, 14) * 30}ms">
       <div class="avatar" ${e.active ? '' : 'style="filter:grayscale(1);opacity:.6"'}>${F.esc(F.initials(e.name))}</div>
-      <div class="meta"><div class="t">${F.esc(e.name)}</div>
+      <div class="meta"><div class="t">${F.esc(e.name)} ${e.active ? '' : '<span class="pill mute">موقوف</span>'}</div>
         <div class="s"><span class="num">${F.esc(e.phone || '')}</span>${[e.job_title, e.department].filter(Boolean).length ? ' · ' + F.esc([e.job_title, e.department].filter(Boolean).join(' · ')) : ''}</div></div>
-      ${e.active ? `<span class="tiny muted num">${e.shift_start}–${e.shift_end}</span>` : '<span class="pill mute">موقوف</span>'}
+      <button class="pin-chip" data-pin="${e.id}" aria-label="الرمز السري"><span class="tiny muted">الرمز</span> <b class="num">${pinText(e)}</b> ${e.pin ? F.ICONS.eye : ''}</button>
+      <button class="icon-btn sm" data-reset="${e.id}" aria-label="إعادة تعيين الرمز السري" title="إعادة تعيين الرمز السري">${F.ICONS.key}</button>
     </div>`).join('');
     view(hero('الموظفون', `${active.toLocaleString(F.LOCALE)} نشط من ${emps.length.toLocaleString(F.LOCALE)}`) + `
       <div class="page"><div class="card lift" style="padding:12px">
-        <div class="search"><input class="input" id="eq" placeholder="ابحث عن موظف" value="${F.esc(state.empQ)}">${F.ICONS.search}</div></div>
+        <div class="search"><input class="input" id="eq" placeholder="ابحث عن موظف" value="${F.esc(state.empQ)}">${F.ICONS.search}</div>
+        <div class="row between" style="margin-top:10px;padding:0 4px"><span class="tiny muted">الاسم · الجوال · الرمز السري</span>
+          <button class="chip ${state.showPins ? 'active' : ''}" id="togglePins">${state.showPins ? 'إخفاء الرموز' : 'إظهار الرموز'}</button></div></div>
         <div style="margin-top:14px">${emps.length === 0 ? emptyEmployees() : list.length ? `<div class="list">${items}</div>` : '<div class="card empty"><div class="ico">🔎</div>لا توجد نتائج</div>'}</div>
       </div>`);
     bindRefresh(() => loadEmployees(true));
     const eq = $('#eq');
     eq.oninput = () => { state.empQ = eq.value; const p = eq.selectionStart; renderEmployees(); const n = $('#eq'); n.focus(); n.setSelectionRange(p, p); };
     document.querySelectorAll('.item[data-id]').forEach((it) => it.onclick = () => employeeForm(emps.find((e) => e.id === it.dataset.id)));
+    document.querySelectorAll('[data-pin]').forEach((b) => b.onclick = (ev) => {
+      ev.stopPropagation();
+      const e = emps.find((x) => x.id === b.dataset.pin);
+      if (!e.pin) return F.toast('الرمز غير محفوظ، أعد تعيينه لعرضه');
+      state.shownPin = state.shownPin === e.id ? null : e.id;
+      renderEmployees();
+    });
+    document.querySelectorAll('[data-reset]').forEach((b) => b.onclick = (ev) => { ev.stopPropagation(); resetPin(emps.find((x) => x.id === b.dataset.reset)); });
+    $('#togglePins').onclick = () => { state.showPins = !state.showPins; state.shownPin = null; renderEmployees(); };
     const ab = $('#goAddEmp'); if (ab) ab.onclick = () => employeeForm();
     addFab(() => employeeForm());
+  }
+
+  // Share sign-in details (WhatsApp / share sheet).
+  function shareLogin(name, phone, pin) {
+    const link = location.href.replace(/admin\.html.*$/, '');
+    const text = F.lang === 'en'
+      ? `Hello ${name}\nAttendance link: ${link}\nMobile number: ${phone}\nPIN: ${pin}`
+      : `مرحباً ${name}\nرابط تسجيل الحضور: ${link}\nرقم الجوال: ${phone}\nالرمز السري: ${pin}`;
+    if (navigator.share) navigator.share({ title: F.T('الفكر السعد'), text }).catch(() => {});
+    else window.open('https://wa.me/?text=' + encodeURIComponent(text), '_blank');
+  }
+  function loginCard(name, phone, pin) {
+    F.sheet(`<div class="confirm-box"><div class="ico" style="background:var(--ok-bg);color:var(--ok)">✓</div><h3>${F.esc(name)}</h3>
+      <p class="muted small">أرسل بيانات الدخول للموظف:</p></div>
+      <div class="card" style="box-shadow:none"><div class="kv"><span class="k">الرابط</span><span class="v tiny num">${F.esc(location.href.replace(/admin\.html.*$/, ''))}</span></div>
+      <div class="kv"><span class="k">رقم الجوال</span><span class="v num">${F.esc(phone)}</span></div>
+      <div class="kv"><span class="k">الرمز السري</span><span class="v num" style="font-size:20px;letter-spacing:.15em">${F.esc(pin)}</span></div></div>
+      <div class="grid-2" style="margin-top:14px"><button class="btn ghost" id="shareBtn">مشاركة</button><button class="btn" data-close>تم</button></div>`,
+    (el) => { $('#shareBtn', el).onclick = () => shareLogin(name, phone, pin); });
+  }
+  function resetPin(e) {
+    const suggestion = String(Math.floor(1000 + Math.random() * 9000));
+    F.sheet(`<h3>إعادة تعيين الرمز السري</h3><p class="muted small" style="margin-top:-10px">${F.esc(e.name)} · <span class="num">${F.esc(e.phone || '')}</span></p>
+      <label class="field"><span>الرمز السري الجديد</span><input class="input pin-input" id="newPin" inputmode="numeric" maxlength="8" value="${suggestion}"></label>
+      <p class="tiny muted" style="margin-top:-6px">سيتم تسجيل خروج الموظف من جميع الأجهزة، ويدخل بالرمز الجديد.</p>
+      <button class="btn block" id="pinSave">حفظ الرمز الجديد</button>
+      <button class="btn ghost block" data-close style="margin-top:10px">إلغاء</button>`, (el, close) => {
+      $('#pinSave', el).onclick = async (ev) => {
+        const pin = $('#newPin', el).value.trim();
+        if (!/^\d{4,8}$/.test(pin)) return F.toast(F.errorText({ code: 'bad_pin' }), 'bad');
+        F.busy(ev.currentTarget, true);
+        try {
+          const r = await call('alfikr_admin_reset_pin', { p_id: e.id, p_pin: pin });
+          e.pin = r.pin;
+          close();
+          F.toast('تم تغيير الرمز السري', 'ok');
+          if (state.tab === 'employees') renderEmployees();
+          loginCard(e.name, e.phone || '', r.pin);
+        } catch (err) { fail(err); F.busy(ev.currentTarget, false); }
+      };
+    });
   }
   function addFab(fn) {
     document.querySelectorAll('.fab').forEach((f) => f.remove());
@@ -349,23 +416,8 @@
         try {
           await call('alfikr_admin_save_employee', { p });
           close();
-          if (!emp) {
-            F.sheet(`<div class="confirm-box"><div class="ico" style="background:var(--ok-bg);color:var(--ok)">✓</div><h3>تمت إضافة ${F.esc(p.name)}</h3>
-              <p class="muted small">أرسل بيانات الدخول للموظف:</p></div>
-              <div class="card" style="box-shadow:none"><div class="kv"><span class="k">الرابط</span><span class="v tiny num">${F.esc(location.href.replace(/admin\.html.*$/, ''))}</span></div>
-              <div class="kv"><span class="k">رقم الجوال</span><span class="v num">${F.esc(p.phone)}</span></div>
-              <div class="kv"><span class="k">الرمز السري</span><span class="v num">${F.esc(p.pin)}</span></div></div>
-              <div class="grid-2" style="margin-top:14px"><button class="btn ghost" id="shareBtn">مشاركة</button><button class="btn" data-close>تم</button></div>`, (el2) => {
-              $('#shareBtn', el2).onclick = () => {
-                const link = location.href.replace(/admin\.html.*$/, '');
-                const text = F.lang === 'en'
-                  ? `Hello ${p.name}\nAttendance link: ${link}\nMobile number: ${p.phone}\nPIN: ${p.pin}`
-                  : `مرحباً ${p.name}\nرابط تسجيل الحضور: ${link}\nرقم الجوال: ${p.phone}\nالرمز السري: ${p.pin}`;
-                if (navigator.share) navigator.share({ title: F.T('الفكر السعد'), text }).catch(() => {});
-                else { window.open('https://wa.me/?text=' + encodeURIComponent(text), '_blank'); }
-              };
-            });
-          } else F.toast('تم حفظ التعديلات', 'ok');
+          if (!emp) loginCard(p.name, p.phone, p.pin);
+          else F.toast('تم حفظ التعديلات', 'ok');
           await ensureList(true);
           state.overview = null;
           renderEmployees();
@@ -381,88 +433,105 @@
     });
   }
 
-  /* ───────── RECORDS ───────── */
+  /* ───────── PRINTS (every check-in/out ever) ───────── */
   async function loadRecords(force) {
     try {
       await ensureList();
-      const today = F.todayISO(state.tz);
-      if (!state.recTo) { state.recTo = today; state.recFrom = F.addDays(today, -6); }
-      if (!state.records || force) view(hero('سجلات الحضور', 'تقارير وتصدير') + skeleton());
-      state.records = await call('alfikr_admin_attendance', { p_from: state.recFrom, p_to: state.recTo, p_employee: state.recEmp || null, p_photos: true });
-      renderRecords();
+      if (!state.prints || force) view(hero('كل البصمات', 'كل بصمة مع الصورة والموقع') + skeleton());
+      const res = await call('alfikr_admin_punches', { p_from: state.recFrom || null, p_to: state.recTo || null, p_employee: state.recEmp || null, p_limit: 40 });
+      state.prints = { items: res.items, next: res.next_before };
+      renderPrints();
     } catch (e) { fail(e); }
   }
-  function renderRecords() {
-    const tz = state.tz, recs = state.records;
-    const late = recs.filter((r) => r.status === 'late').length;
-    const hours = recs.reduce((s, r) => s + (r.check_in && r.check_out ? new Date(r.check_out) - new Date(r.check_in) : 0), 0) / 36e5;
+  async function moreprints(btn) {
+    F.busy(btn, true);
+    try {
+      const res = await call('alfikr_admin_punches', { p_from: state.recFrom || null, p_to: state.recTo || null, p_employee: state.recEmp || null, p_limit: 40, p_before: state.prints.next });
+      state.prints.items = state.prints.items.concat(res.items);
+      state.prints.next = res.next_before;
+      const y = window.scrollY; renderPrints(); window.scrollTo({ top: y });
+    } catch (e) { fail(e); F.busy(btn, false); }
+  }
+  function renderPrints() {
+    const tz = state.tz, items = state.prints.items;
+    const ins = items.filter((p) => p.type === 'in').length;
+    const people = new Set(items.map((p) => p.employee_id)).size;
     const empOpts = '<option value="">كل الموظفين</option>' + state.list.employees.map((e) => `<option value="${e.id}" ${e.id === state.recEmp ? 'selected' : ''}>${F.esc(e.name)}</option>`).join('');
     let lastDate = null;
-    const items = recs.map((r, i) => {
+    const rows = items.map((p, i) => {
       let head = '';
-      if (r.work_date !== lastDate) { lastDate = r.work_date; head = `<div class="item" style="background:var(--surface-2);padding:8px 16px;font-size:12px;font-weight:700;color:var(--muted)">${F.fmtDate(r.work_date, { year: 'numeric' })}</div>`; }
-      const dur = r.check_in && r.check_out ? F.fmtDuration(new Date(r.check_out) - new Date(r.check_in)) : 'لم ينصرف';
-      return head + `<div class="item tap" data-id="${r.id}" style="animation-delay:${Math.min(i, 14) * 25}ms">
-        ${avatar(r)}
-        <div class="meta"><div class="t">${F.esc(r.name)}</div><div class="s"><span class="num">${F.fmtTime(r.check_in, tz)}</span> ← <span class="num">${F.fmtTime(r.check_out, tz)}</span> · ${dur}${r.in_site ? ' · ' + F.esc(r.in_site) : ''}</div></div>
-        ${F.statusPill(r.status)}</div>`;
+      if (p.work_date !== lastDate) { lastDate = p.work_date; head = `<div class="item day-head">${F.fmtDate(p.work_date, { year: 'numeric' })}</div>`; }
+      return head + `<div class="item tap" data-pid="${p.id}" style="animation-delay:${Math.min(i % 40, 14) * 25}ms">
+        ${p.photo_url ? `<div class="avatar photo sq"><img src="${F.esc(p.photo_url)}" alt="" loading="lazy"></div>` : `<div class="avatar sq">${F.esc(F.initials(p.name))}</div>`}
+        <div class="meta"><div class="t">${F.esc(p.name)}</div>
+          <div class="s"><span class="num">${F.fmtTime(p.at, tz)}</span>${p.site ? ' · ' + F.esc(p.site) : ''}${p.accuracy != null ? ' · ±' + p.accuracy + ' م' : ''}</div></div>
+        ${typePill(p.type)}</div>`;
     }).join('');
-    view(hero('سجلات الحضور', 'تقارير وتصدير') + `
+    view(hero('كل البصمات', 'كل بصمة مع الصورة والموقع') + `
       <div class="page">
         <div class="card lift">
           <div class="form-row">
-            <label class="field"><span>من</span><input class="input" type="date" id="rf" value="${state.recFrom}"></label>
-            <label class="field"><span>إلى</span><input class="input" type="date" id="rt" value="${state.recTo}"></label>
+            <label class="field"><span>من</span><input class="input" type="date" id="rf" value="${state.recFrom || ''}"></label>
+            <label class="field"><span>إلى</span><input class="input" type="date" id="rt" value="${state.recTo || ''}"></label>
           </div>
           <label class="field"><span>الموظف</span><select class="input" id="re">${empOpts}</select></label>
           <div class="grid-2"><button class="btn" id="rApply">عرض</button><button class="btn ghost" id="rCsv">${F.ICONS.download} تصدير Excel</button></div>
+          <p class="tiny muted center" style="margin:10px 0 0">اترك التاريخ فارغاً لعرض كل البصمات منذ البداية</p>
         </div>
         <div class="card"><div class="stats3">
-          <div><div class="k">السجلات</div><div class="v">${recs.length.toLocaleString(F.LOCALE)}</div></div>
-          <div><div class="k">التأخير</div><div class="v" style="color:var(--warn)">${late.toLocaleString(F.LOCALE)}</div></div>
-          <div><div class="k">الساعات</div><div class="v">${Math.round(hours).toLocaleString(F.LOCALE)}</div></div>
+          <div><div class="k">البصمات المعروضة</div><div class="v">${items.length.toLocaleString(F.LOCALE)}${state.prints.next ? '+' : ''}</div></div>
+          <div><div class="k">حضور / انصراف</div><div class="v"><span style="color:var(--ok)">${ins}</span> / <span style="color:#ea580c">${items.length - ins}</span></div></div>
+          <div><div class="k">الموظفون</div><div class="v">${people.toLocaleString(F.LOCALE)}</div></div>
         </div></div>
-        <div style="margin-top:14px">${recs.length ? `<div class="list">${items}</div>` : '<div class="card empty"><div class="ico">🗂️</div>لا توجد سجلات في هذه الفترة</div>'}</div>
+        <div style="margin-top:14px">${items.length ? `<div class="list">${rows}</div>` : '<div class="card empty"><div class="ico">🗂️</div>لا توجد بصمات</div>'}</div>
+        ${state.prints.next ? `<button class="btn ghost block" id="morePrints" style="margin-top:14px">تحميل المزيد</button>` : (items.length ? '<p class="tiny muted center" style="margin-top:14px">— نهاية السجل —</p>' : '')}
       </div>`);
     bindRefresh(() => loadRecords(true));
     $('#rApply').onclick = () => {
-      state.recFrom = $('#rf').value || state.recFrom; state.recTo = $('#rt').value || state.recTo; state.recEmp = $('#re').value;
-      if (state.recFrom > state.recTo) { const t = state.recFrom; state.recFrom = state.recTo; state.recTo = t; }
+      state.recFrom = $('#rf').value || null; state.recTo = $('#rt').value || null; state.recEmp = $('#re').value;
+      if (state.recFrom && state.recTo && state.recFrom > state.recTo) { const t = state.recFrom; state.recFrom = state.recTo; state.recTo = t; }
       loadRecords(true);
     };
-    $('#rCsv').onclick = exportCsv;
-    document.querySelectorAll('.item[data-id]').forEach((it) => it.onclick = () => recordDetail(recs.find((r) => r.id === it.dataset.id)));
+    $('#rCsv').onclick = (ev) => exportCsv(ev.currentTarget);
+    const more = $('#morePrints'); if (more) more.onclick = () => moreprints(more);
+    document.querySelectorAll('.item[data-pid]').forEach((it) => it.onclick = () => printDetail(items.find((p) => p.id === it.dataset.pid)));
   }
-  function recordDetail(r) {
-    F.sheet(`<h3>${F.esc(r.name)}</h3><p class="muted small" style="margin-top:-10px">${F.fmtDate(r.work_date, { year: 'numeric' })}</p>
-      <div style="margin-bottom:12px">${F.statusPill(r.status)}</div>
-      ${evidence(r)}
-      <button class="btn soft-danger block" id="recDel" style="margin-top:14px">${F.ICONS.trash} حذف السجل</button>
-      <button class="btn ghost block" data-close style="margin-top:10px">إغلاق</button>`, (el, close) => {
-      $('#recDel', el).onclick = async () => {
-        close();
-        if (!(await F.confirmSheet('حذف السجل', 'سيتمكن الموظف من تسجيل البصمة لهذا اليوم من جديد.', 'حذف'))) return;
-        try { await call('alfikr_admin_delete_attendance', { p_id: r.id }); F.toast('تم حذف السجل', 'ok'); state.overview = null; loadRecords(true); } catch (e) { fail(e); }
-      };
-    });
+  function printDetail(p) {
+    F.sheet(`<div class="row between" style="margin-bottom:12px"><div><h3 style="margin:0">${F.esc(p.name)}</h3>
+      <div class="muted small num">${F.esc(p.phone || '')}</div></div>${typePill(p.type)}</div>
+      ${p.photo_url ? `<a href="${F.esc(p.photo_url)}" target="_blank" rel="noopener"><img class="big-photo" src="${F.esc(p.photo_url)}" alt="${p.type === 'in' ? 'صورة الحضور' : 'صورة الانصراف'}"></a>` : '<div class="card empty">لا توجد صورة</div>'}
+      <div class="card" style="box-shadow:none;margin-top:14px">
+        <div class="kv"><span class="k">التاريخ</span><span class="v">${F.fmtDate(p.work_date, { year: 'numeric' })}</span></div>
+        <div class="kv"><span class="k">الوقت</span><span class="v num">${F.fmtTime(p.at, state.tz)}</span></div>
+        ${p.site ? `<div class="kv"><span class="k">الموقع</span><span class="v">${F.esc(p.site)}</span></div>` : ''}
+        ${p.lat != null ? `<div class="kv"><span class="k">الإحداثيات</span><span class="v tiny"><span class="num">${Number(p.lat).toFixed(5)}, ${Number(p.lng).toFixed(5)}</span>${p.accuracy != null ? ` <span class="muted">±${p.accuracy} م</span>` : ''}</span></div>` : ''}
+      </div>
+      ${p.lat != null ? `<a class="btn block" style="margin-top:14px;text-decoration:none" target="_blank" rel="noopener" href="https://maps.google.com/?q=${p.lat},${p.lng}">${F.ICONS.pin} فتح على الخريطة</a>` : ''}
+      <button class="btn ghost block" data-close style="margin-top:10px">إغلاق</button>`);
   }
-  function exportCsv() {
-    const tz = state.tz;
-    const t = (iso) => (iso ? new Date(iso).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: tz }) : '');
-    const rows = [['التاريخ', 'الاسم', 'الجوال', 'القسم', 'الحضور', 'موقع الحضور', 'إحداثيات الحضور', 'الانصراف', 'موقع الانصراف', 'إحداثيات الانصراف', 'الساعات', 'الحالة'].map(F.T)];
-    const ll = (lat, lng) => (lat != null ? `${lat},${lng}` : '');
-    state.records.slice().reverse().forEach((r) => rows.push([
-      r.work_date, r.name, r.phone || '', r.department || '', t(r.check_in), r.in_site || '', ll(r.in_lat, r.in_lng),
-      t(r.check_out), r.out_site || '', ll(r.out_lat, r.out_lng),
-      r.check_in && r.check_out ? ((new Date(r.check_out) - new Date(r.check_in)) / 36e5).toFixed(2) : '',
-      F.T((F.STATUS[r.status] || {}).label || r.status),
-    ]));
-    const csv = '﻿' + rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\r\n');
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
-    a.download = `attendance_${state.recFrom}_${state.recTo}.csv`;
-    document.body.appendChild(a); a.click(); a.remove();
-    F.toast('تم تصدير الملف', 'ok');
+  // Exports every print matching the filters (all pages), with date, time, site and coordinates.
+  async function exportCsv(btn) {
+    F.busy(btn, true);
+    try {
+      let all = [], before = null;
+      for (let i = 0; i < 100; i++) {
+        const res = await call('alfikr_admin_punches', { p_from: state.recFrom || null, p_to: state.recTo || null, p_employee: state.recEmp || null, p_limit: 100, p_before: before });
+        all = all.concat(res.items);
+        before = res.next_before;
+        if (!before) break;
+      }
+      const tz = state.tz;
+      const t = (iso) => new Date(iso).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: tz });
+      const rows = [['التاريخ', 'الوقت', 'الاسم', 'الجوال', 'النوع', 'الموقع', 'الإحداثيات', 'الدقة (م)'].map(F.T)];
+      all.reverse().forEach((p) => rows.push([p.work_date, t(p.at), p.name, p.phone || '', F.T(p.type === 'in' ? 'حضور' : 'انصراف'),
+        p.site || '', p.lat != null ? `${p.lat},${p.lng}` : '', p.accuracy != null ? p.accuracy : '']));
+      const csv = '\ufeff' + rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\r\n');
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+      a.download = `prints_${state.recFrom || 'all'}_${state.recTo || F.todayISO(tz)}.csv`;
+      document.body.appendChild(a); a.click(); a.remove();
+      F.toast('تم تصدير الملف', 'ok');
+    } catch (e) { fail(e); } finally { F.busy(btn, false); }
   }
 
   /* ───────── SETTINGS ───────── */
@@ -518,7 +587,7 @@
   window.addEventListener('fikr:lang', () => {
     if (!state.token || $('#app').classList.contains('hidden')) return;
     const r = { today: state.overview && (() => renderToday(true)), employees: state.list && renderEmployees,
-      records: state.records && renderRecords, settings: state.list && renderSettings }[state.tab];
+      records: state.prints && renderPrints, settings: state.list && renderSettings }[state.tab];
     if (r) r(); else go(state.tab);
   });
 

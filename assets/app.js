@@ -124,8 +124,6 @@
     el.innerHTML = `<span class="dot"></span>${F.esc(i.text)}`;
     const btn = $('#punchBtn');
     if (!btn || btn.classList.contains('loading') || btn.classList.contains('success')) return;
-    const ps = punchState();
-    if (ps === 'done') return;
     btn.classList.toggle('locked', !i.ok);
     $('.hint', btn).textContent = i.ok ? 'سيلفي + موقعك الحالي' : 'شغّل الموقع أولاً';
   }
@@ -166,18 +164,23 @@
     return h < 12 ? 'صباح الخير' : 'مساء الخير';
   }
 
+  // Next print: 'in' (check in / back at work) or 'out' (leave work). Several pairs per day are allowed.
   function punchState() {
     const t = state.me.today;
-    if (!t || !t.check_in) return 'in';
-    if (!t.check_out) return 'out';
-    return 'done';
+    return t && t.last_in ? 'out' : 'in';
+  }
+  // Minutes worked today, counting the current open period.
+  function workedMs(t, n) {
+    if (!t) return 0;
+    return Number(t.worked_minutes || 0) * 60000 + (t.last_in ? Math.max(0, n - new Date(t.last_in)) : 0);
   }
 
   function homeView() {
     const me = state.me, e = me.employee, t = me.today || {};
     const ps = punchState();
-    const lbl = { in: 'تسجيل الحضور', out: 'تسجيل الانصراف', done: 'اكتمل يومك' }[ps];
-    const hint = { in: 'سيلفي + موقعك الحالي', out: 'سيلفي + موقعك الحالي', done: 'نراك غداً بإذن الله' }[ps];
+    const lbl = ps === 'out' ? 'تسجيل الانصراف' : (t.check_in ? 'تسجيل حضور جديد' : 'تسجيل الحضور');
+    const hint = 'سيلفي + موقعك الحالي';
+    const prints = me.today_punches || [];
     const statusToday = t.check_in ? F.statusPill(t.status) : '<span class="pill mute">لم يسجل بعد</span>';
     return `
     <header class="hero">
@@ -200,9 +203,9 @@
           <div class="hijri">${F.esc(F.fmtHijri(me.timezone))}</div>
         </div>
         <div class="punch-zone">
-          <button class="punch ${ps}" id="punchBtn" ${ps === 'done' ? 'disabled' : ''}>
+          <button class="punch ${ps}" id="punchBtn">
             <svg class="orbit" viewBox="0 0 100 100"><circle cx="50" cy="50" r="48" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-dasharray="70 232" opacity=".9"/></svg>
-            <span class="fp-wrap">${ps === 'done' ? F.ICONS.check.replace('<svg', '<svg class="fp"') : F.ICONS.finger.replace('<svg', '<svg class="fp"')}</span>
+            <span class="fp-wrap">${F.ICONS.finger.replace('<svg', '<svg class="fp"')}</span>
             <span class="lbl">${lbl}</span>
             <span class="hint">${hint}</span>
           </button>
@@ -213,7 +216,7 @@
       <div class="card">
         <div class="stats3">
           <div><div class="k">الحضور</div><div class="v num">${F.fmtTime(t.check_in, me.timezone)}</div></div>
-          <div><div class="k">الانصراف</div><div class="v num">${F.fmtTime(t.check_out, me.timezone)}</div></div>
+          <div><div class="k">الانصراف</div><div class="v num">${t.last_in ? '—' : F.fmtTime(t.check_out, me.timezone)}</div></div>
           <div><div class="k">ساعات العمل</div><div class="v num" id="worked">${t.check_in ? '' : '00:00:00'}</div></div>
         </div>
       </div>
@@ -228,6 +231,11 @@
           ${statusToday}
         </div>
       </div>
+
+      ${prints.length ? `<div class="section-title"><span>بصمات اليوم</span><span class="tiny muted">${prints.length}</span></div>
+      <div class="card"><div class="timeline">${prints.map((p, i) => `<div class="tl ${p.type}" style="animation-delay:${i * 60}ms">
+        <span class="tl-dot"></span><div class="tl-body"><b>${p.type === 'in' ? 'حضور' : 'انصراف'}</b>
+        <span class="num">${F.fmtTime(p.at, me.timezone)}</span>${p.site ? `<div class="tiny muted">📍 ${F.esc(p.site)}</div>` : ''}</div></div>`).join('')}</div></div>` : ''}
 
       <div class="section-title"><span>آخر 7 أيام</span></div>
       <div class="card">${weekStrip()}</div>
@@ -262,10 +270,7 @@
       if (cd && !cd.textContent) cd.textContent = n.toLocaleDateString(F.LOCALE, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: tz });
       const t = state.me.today;
       const w = $('#worked');
-      if (w && t && t.check_in) {
-        const end = t.check_out ? new Date(t.check_out) : n;
-        w.textContent = F.fmtClock(end - new Date(t.check_in));
-      }
+      if (w && t && t.check_in) w.textContent = F.fmtClock(workedMs(t, n));
     };
     tick();
     state.timers.push(setInterval(tick, 1000));
@@ -276,7 +281,7 @@
   async function onPunch() {
     const btn = $('#punchBtn');
     const ps = punchState();
-    if (ps === 'done' || btn.classList.contains('loading')) return;
+    if (btn.classList.contains('loading')) return;
     F.vibrate(10);
     // 1) location must be on
     let pos = state.pos;
@@ -426,15 +431,16 @@
     const me = state.me, tz = me.timezone;
     const hist = me.history || [];
     const late = hist.filter((h) => h.status === 'late').length;
-    const totalMs = hist.reduce((s, h) => s + (h.check_in && h.check_out ? new Date(h.check_out) - new Date(h.check_in) : 0), 0);
+    const n = now();
+    const totalMs = hist.reduce((s, h) => s + workedMs(h, n), 0);
     const items = hist.map((h, i) => {
-      const dur = h.check_in && h.check_out ? F.fmtDuration(new Date(h.check_out) - new Date(h.check_in)) : 'لم ينصرف';
+      const dur = h.last_in ? 'لم ينصرف' : F.fmtDuration(workedMs(h, n));
       const d = new Date(h.work_date + 'T12:00:00Z');
       return `<div class="item" style="animation-delay:${Math.min(i, 12) * 40}ms">
         <div class="avatar" style="flex-direction:column;line-height:1.1;font-size:15px">${d.getUTCDate()}<span class="tiny" style="font-size:10px;font-weight:600">${d.toLocaleDateString(F.LOCALE, { month: 'short', timeZone: 'UTC' })}</span></div>
         <div class="meta">
           <div class="t">${F.fmtDate(h.work_date, { month: undefined, day: undefined })}</div>
-          <div class="s"><span class="num">${F.fmtTime(h.check_in, tz)}</span> ← <span class="num">${F.fmtTime(h.check_out, tz)}</span> · ${dur}${h.in_site ? ' · ' + F.esc(h.in_site) : ''}</div>
+          <div class="s"><span class="num">${F.fmtTime(h.check_in, tz)}</span> ← <span class="num">${h.last_in ? '—' : F.fmtTime(h.check_out, tz)}</span> · ${dur}${h.in_site ? ' · ' + F.esc(h.in_site) : ''}</div>
         </div>
         ${F.statusPill(h.status)}
       </div>`;
