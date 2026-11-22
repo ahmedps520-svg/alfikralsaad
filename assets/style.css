@@ -57,7 +57,7 @@ body {
 button, input, select, textarea { font: inherit; color: inherit; }
 button { cursor: pointer; }
 a { color: var(--brand); }
-.hidden { display: none !important; }
+.hidden, [hidden] { display: none !important; }
 .num { font-variant-numeric: tabular-nums; direction: ltr; unicode-bidi: isolate; display: inline-block; }
 
 /* ───── Layout shell ───── */

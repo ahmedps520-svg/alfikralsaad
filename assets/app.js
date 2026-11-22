@@ -32,9 +32,9 @@
     $('#app').classList.add('hidden');
     $('#tabbar').classList.add('hidden');
     $('#login').classList.remove('hidden');
-    const saved = F.store.get('fikr.emp.code');
-    if (saved) { $('#code').value = saved; }
-    setTimeout(() => (saved ? $('#pin') : $('#code')).focus(), 400);
+    const saved = F.store.get('fikr.emp.phone');
+    if (saved) { $('#phone').value = saved; }
+    setTimeout(() => (saved ? $('#pin') : $('#phone')).focus(), 400);
   }
 
   function showApp() {
@@ -48,15 +48,15 @@
   $('#loginForm').addEventListener('submit', async (ev) => {
     ev.preventDefault();
     const btn = $('#loginBtn');
-    const code = $('#code').value.trim();
+    const phone = $('#phone').value.trim();
     const pin = $('#pin').value.trim();
-    if (!code || !pin) return;
+    if (!phone || !pin) return;
     F.busy(btn, true);
     try {
-      const r = await F.rpc('alfikr_emp_login', { p_code: code, p_pin: pin });
+      const r = await F.rpc('alfikr_emp_login', { p_phone: phone, p_pin: pin });
       state.token = r.token;
       F.store.set(TOKEN_KEY, r.token);
-      F.store.set('fikr.emp.code', code);
+      F.store.set('fikr.emp.phone', phone);
       await loadMe();
       $('#pin').value = '';
       showApp();
@@ -87,31 +87,25 @@
     if (!('geolocation' in navigator)) { state.geo = 'unsupported'; return; }
     if (watchId != null) return;
     watchId = navigator.geolocation.watchPosition(
-      (p) => { state.pos = { lat: p.coords.latitude, lng: p.coords.longitude, acc: p.coords.accuracy }; state.geo = 'ok'; updateLoc(); },
+      (p) => { state.pos = { lat: p.coords.latitude, lng: p.coords.longitude, acc: p.coords.accuracy, at: Date.now() }; state.geo = 'ok'; updateLoc(); },
       (err) => { state.geo = err.code === 1 ? 'denied' : 'error'; if (err.code === 1) state.pos = null; updateLoc(); },
       { enableHighAccuracy: true, maximumAge: 15000, timeout: 25000 }
     );
   }
+  // Uses the live (watched) position when it is recent; otherwise asks the device for a new fix.
   function freshPosition() {
     return new Promise((resolve) => {
+      if (state.pos && state.geo === 'ok' && Date.now() - state.pos.at < 30e3) return resolve(state.pos);
       if (!('geolocation' in navigator)) return resolve(state.pos);
       navigator.geolocation.getCurrentPosition(
-        (p) => { state.pos = { lat: p.coords.latitude, lng: p.coords.longitude, acc: p.coords.accuracy }; state.geo = 'ok'; resolve(state.pos); },
+        (p) => { state.pos = { lat: p.coords.latitude, lng: p.coords.longitude, acc: p.coords.accuracy, at: Date.now() }; state.geo = 'ok'; resolve(state.pos); },
         (err) => { state.geo = err.code === 1 ? 'denied' : 'error'; if (err.code === 1) state.pos = null; resolve(state.pos); },
-        { enableHighAccuracy: true, maximumAge: 5000, timeout: 12000 }
+        { enableHighAccuracy: true, maximumAge: 10000, timeout: 10000 }
       );
     });
   }
-  function geofence() {
-    const b = state.me && state.me.branch;
-    return b && b.lat != null && b.lng != null ? b : null;
-  }
-  // Check-in/out is only possible with location ON and inside the workplace radius.
-  // The server enforces the same rule; this only explains it to the employee up front.
-  const MAX_ACCURACY_M = 150, ACCURACY_ALLOWANCE_M = 25;
+  // Check-in/out needs location ON (the position is logged with the selfie). Employees can be anywhere.
   function locInfo() {
-    const b = geofence();
-    if (!b) return { ok: false, cls: 'bad', text: 'لم يحدد المسؤول موقع مقر عملك بعد' };
     if (state.geo === 'unsupported') return { ok: false, cls: 'bad', text: 'جهازك لا يدعم تحديد الموقع' };
     if (state.geo === 'denied') return { ok: false, cls: 'bad', text: 'الموقع مغلق · فعّله واسمح للمتصفح بالوصول' };
     if (!state.pos) {
@@ -119,12 +113,8 @@
         ? { ok: false, cls: 'bad', text: 'تعذّر تحديد موقعك · تأكد أن خدمة الموقع مفعّلة' }
         : { ok: false, cls: 'warn', text: 'جارٍ تحديد موقعك…' };
     }
-    const acc = state.pos.acc || 0;
-    if (acc > MAX_ACCURACY_M) return { ok: false, cls: 'warn', text: `دقة الموقع ضعيفة (±${Math.round(acc).toLocaleString(F.LOCALE)} م) · فعّل GPS` };
-    const d = Math.round(F.distanceM(state.pos.lat, state.pos.lng, b.lat, b.lng));
-    const dTxt = d >= 1000 ? `${(d / 1000).toLocaleString(F.LOCALE, { maximumFractionDigits: 1 })} كم` : `${d.toLocaleString(F.LOCALE)} م`;
-    if (d <= b.radius_m + Math.min(acc, ACCURACY_ALLOWANCE_M)) return { ok: true, cls: 'ok', text: `داخل ${b.name} · ${dTxt}` };
-    return { ok: false, cls: 'bad', text: `خارج مقر العمل · تبعد ${dTxt}` };
+    const acc = Math.round(state.pos.acc || 0);
+    return { ok: true, cls: 'ok', text: `الموقع مفعّل · الدقة ±${acc.toLocaleString(F.LOCALE)} م` };
   }
   function updateLoc() {
     const el = $('#loc');
@@ -137,9 +127,7 @@
     const ps = punchState();
     if (ps === 'done') return;
     btn.classList.toggle('locked', !i.ok);
-    $('.hint', btn).textContent = i.ok
-      ? (ps === 'in' ? 'اضغط لتسجيل البصمة' : 'اضغط عند المغادرة')
-      : 'متاح فقط داخل مقر العمل';
+    $('.hint', btn).textContent = i.ok ? 'سيلفي + موقعك الحالي' : 'شغّل الموقع أولاً';
   }
 
   /* ───────── render ───────── */
@@ -189,7 +177,7 @@
     const me = state.me, e = me.employee, t = me.today || {};
     const ps = punchState();
     const lbl = { in: 'تسجيل الحضور', out: 'تسجيل الانصراف', done: 'اكتمل يومك' }[ps];
-    const hint = { in: 'اضغط لتسجيل البصمة', out: 'اضغط عند المغادرة', done: 'نراك غداً بإذن الله' }[ps];
+    const hint = { in: 'سيلفي + موقعك الحالي', out: 'سيلفي + موقعك الحالي', done: 'نراك غداً بإذن الله' }[ps];
     const statusToday = t.check_in ? F.statusPill(t.status) : '<span class="pill mute">لم يسجل بعد</span>';
     return `
     <header class="hero">
@@ -235,7 +223,7 @@
           <div class="ico">${F.ICONS.clock}</div>
           <div style="flex:1">
             <div class="bold">دوام اليوم</div>
-            <div class="muted small"><span class="num">${e.shift_start}</span> – <span class="num">${e.shift_end}</span>${e.branch_name ? ' · ' + F.esc(e.branch_name) : ''}</div>
+            <div class="muted small"><span class="num">${e.shift_start}</span> – <span class="num">${e.shift_end}</span>${t.in_site ? ' · ' + F.esc(t.in_site) : ''}</div>
           </div>
           ${statusToday}
         </div>
@@ -289,21 +277,28 @@
     const btn = $('#punchBtn');
     const ps = punchState();
     if (ps === 'done' || btn.classList.contains('loading')) return;
-    if (ps === 'out') {
-      const ok = await F.confirmSheet('تأكيد الانصراف', 'هل تريد تسجيل انصرافك الآن؟ لا يمكن التراجع بعد التسجيل.', 'تسجيل الانصراف');
-      if (!ok) return;
+    F.vibrate(10);
+    // 1) location must be on
+    let pos = state.pos;
+    if (!pos || state.geo !== 'ok') {
+      $('.hint', btn).textContent = 'نحدد موقعك…';
+      pos = await freshPosition();
+      updateLoc();
+      if (!pos || state.geo !== 'ok') return F.toast(locInfo().text, 'bad');
     }
-    F.vibrate(15);
+    // 2) live selfie (+ optional site name)
+    const shot = await selfieSheet(ps);
+    if (!shot) return;
+    // 3) submit with a fresh position
     btn.classList.add('loading');
-    $('.lbl', btn).textContent = 'جارٍ التحقق…';
-    $('.hint', btn).textContent = 'نتحقق من موقعك';
+    $('.lbl', btn).textContent = 'جارٍ التسجيل…';
+    $('.hint', btn).textContent = 'نرفع الصورة والموقع';
     try {
-      if (!geofence()) throw { code: 'no_workplace' };
-      const pos = await freshPosition();
-      const info = locInfo();
-      if (!pos || !info.ok) throw { local: info.text };
+      pos = (await freshPosition()) || pos;
+      if (!pos) throw { code: 'location_required' };
       const r = await F.rpc('alfikr_emp_punch', {
         p_token: state.token, p_type: ps, p_lat: pos.lat, p_lng: pos.lng, p_accuracy: pos.acc,
+        p_site: shot.site, p_photo: shot.photo,
       });
       btn.classList.remove('loading');
       btn.classList.add('success');
@@ -317,14 +312,101 @@
     } catch (e) {
       btn.classList.remove('loading');
       $('.lbl', btn).textContent = ps === 'in' ? 'تسجيل الحضور' : 'تسجيل الانصراف';
-      $('.hint', btn).textContent = 'حاول مرة أخرى';
       btn.classList.remove('shake'); void btn.offsetWidth; btn.classList.add('shake');
       F.vibrate([40, 50, 40]);
       if (e.code === 'unauthorized') return logout(true);
-      F.toast(e.local || F.errorText(e), 'bad');
+      F.toast(F.errorText(e), 'bad');
       updateLoc();
-      if (/^already_/.test(e.code || '')) refresh();
+      if (/^already_|^not_checked/.test(e.code || '')) refresh();
     }
+  }
+
+  /* ───────── selfie camera ───────── */
+  // Opens the front camera inside the app (no gallery). Resolves { photo, site } or null.
+  function selfieSheet(ps) {
+    return new Promise((resolve) => {
+      let stream = null, done = false, photo = null;
+      const recent = (state.me.recent_sites || []);
+      const lastSite = (state.me.today && state.me.today.in_site) || recent[0] || '';
+      const stop = () => { if (stream) stream.getTracks().forEach((t) => t.stop()); stream = null; };
+      F.sheet(`
+        <h3>${ps === 'in' ? 'تسجيل الحضور' : 'تسجيل الانصراف'}</h3>
+        <p class="muted small" style="margin:-8px 0 14px">التقط صورة سيلفي الآن لإثبات تواجدك، وسيُحفظ موقعك الحالي معها</p>
+        <div class="cam"><video id="camVideo" playsinline autoplay muted></video><img id="camShot" alt="" hidden>
+          <div class="cam-ring"></div><div class="cam-msg" id="camMsg">جارٍ تشغيل الكاميرا…</div></div>
+        <label class="field" style="margin-top:16px"><span>مكان العمل اليوم (اختياري)</span>
+          <input class="input" id="camSite" list="siteList" maxlength="80" placeholder="مثال: مشروع حي النرجس" value="${F.esc(lastSite)}">
+          <datalist id="siteList">${recent.map((x) => `<option value="${F.esc(x)}">`).join('')}</datalist></label>
+        <input type="file" id="camFile" accept="image/*" capture="user" hidden>
+        <div id="camActions"><button class="btn block" id="camSnap" disabled>${F.ICONS.camera} التقط الصورة</button></div>
+        <button class="btn ghost block" data-close style="margin-top:10px">إلغاء</button>`,
+      (el, close) => {
+        const video = $('#camVideo', el), img = $('#camShot', el), msg = $('#camMsg', el), actions = $('#camActions', el);
+        const snapBtn = () => $('#camSnap', el);
+        const setShot = (dataUrl) => {
+          photo = dataUrl;
+          img.src = dataUrl; img.hidden = false; video.hidden = true; msg.hidden = true;
+          stop();
+          actions.innerHTML = `<div class="grid-2"><button class="btn ghost" id="camRetake">إعادة التصوير</button>
+            <button class="btn" id="camOk">${F.ICONS.check} تأكيد ${ps === 'in' ? 'الحضور' : 'الانصراف'}</button></div>`;
+          $('#camRetake', el).onclick = () => { photo = null; img.hidden = true; video.hidden = false; actions.innerHTML = `<button class="btn block" id="camSnap">${F.ICONS.camera} التقط الصورة</button>`; startCam(); };
+          $('#camOk', el).onclick = () => { done = true; const site = $('#camSite', el).value.trim(); close(); resolve({ photo, site }); };
+        };
+        const useFileFallback = () => {
+          msg.textContent = 'اضغط لفتح الكاميرا';
+          actions.innerHTML = `<button class="btn block" id="camSnap">${F.ICONS.camera} فتح الكاميرا</button>`;
+          snapBtn().onclick = () => $('#camFile', el).click();
+          $('#camFile', el).onchange = async (ev) => {
+            const f = ev.target.files && ev.target.files[0];
+            if (!f) return;
+            if (Date.now() - f.lastModified > 3 * 60e3) return F.toast('التقط صورة جديدة الآن، لا يمكن استخدام صورة قديمة', 'bad');
+            const bmp = await loadImage(URL.createObjectURL(f));
+            setShot(stamp(bmp, bmp.naturalWidth || bmp.width, bmp.naturalHeight || bmp.height, false));
+          };
+        };
+        async function startCam() {
+          if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return useFileFallback();
+          try {
+            stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 720 }, height: { ideal: 720 } }, audio: false });
+            if (done) return stop();
+            video.srcObject = stream;
+            await video.play().catch(() => {});
+            msg.hidden = true;
+            const b = snapBtn(); b.disabled = false;
+            b.onclick = () => { if (!video.videoWidth) return; F.vibrate(15); setShot(stamp(video, video.videoWidth, video.videoHeight, true)); };
+          } catch (err) {
+            if (err && (err.name === 'NotAllowedError' || err.name === 'SecurityError')) {
+              msg.textContent = F.errorText({ code: 'camera_denied' });
+              F.toast(F.errorText({ code: 'camera_denied' }), 'bad');
+            } else useFileFallback();
+          }
+        }
+        startCam();
+      }, () => { stop(); if (!done) resolve(null); });
+    });
+  }
+  function loadImage(src) {
+    return new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = src; });
+  }
+  // Crops to a square, draws the selfie (mirrored like the preview), and stamps the time and position on it.
+  function stamp(source, w, h, mirror) {
+    const size = 540, side = Math.min(w, h);
+    const c = document.createElement('canvas');
+    c.width = size; c.height = size;
+    const x = c.getContext('2d');
+    x.save();
+    if (mirror) { x.translate(size, 0); x.scale(-1, 1); }
+    x.drawImage(source, (w - side) / 2, (h - side) / 2, side, side, 0, 0, size, size);
+    x.restore();
+    const g = x.createLinearGradient(0, size - 90, 0, size);
+    g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(1, 'rgba(0,0,0,.65)');
+    x.fillStyle = g; x.fillRect(0, size - 90, size, 90);
+    x.fillStyle = '#fff'; x.font = '600 18px system-ui, sans-serif'; x.textBaseline = 'bottom'; x.textAlign = 'center';
+    const n = now();
+    const when = n.toLocaleString('en-GB', { timeZone: state.me.timezone, dateStyle: 'medium', timeStyle: 'short' });
+    x.fillText(when, size / 2, size - 44);
+    if (state.pos) x.fillText(`${state.pos.lat.toFixed(5)}, ${state.pos.lng.toFixed(5)}  ±${Math.round(state.pos.acc || 0)}m`, size / 2, size - 20);
+    return c.toDataURL('image/jpeg', 0.78);
   }
 
   function burst(btn) {
@@ -352,7 +434,7 @@
         <div class="avatar" style="flex-direction:column;line-height:1.1;font-size:15px">${d.getUTCDate()}<span class="tiny" style="font-size:10px;font-weight:600">${d.toLocaleDateString(F.LOCALE, { month: 'short', timeZone: 'UTC' })}</span></div>
         <div class="meta">
           <div class="t">${F.fmtDate(h.work_date, { month: undefined, day: undefined })}</div>
-          <div class="s"><span class="num">${F.fmtTime(h.check_in, tz)}</span> ← <span class="num">${F.fmtTime(h.check_out, tz)}</span> · ${dur}</div>
+          <div class="s"><span class="num">${F.fmtTime(h.check_in, tz)}</span> ← <span class="num">${F.fmtTime(h.check_out, tz)}</span> · ${dur}${h.in_site ? ' · ' + F.esc(h.in_site) : ''}</div>
         </div>
         ${F.statusPill(h.status)}
       </div>`;
@@ -382,11 +464,10 @@
     </header>
     <div class="page">
       <div class="card lift">
+        ${kv('الجوال', e.phone ? `<span class="num">${F.esc(e.phone)}</span>` : '')}
         ${kv('الرقم الوظيفي', `<span class="num">${F.esc(e.code)}</span>`)}
         ${kv('الجهة', F.esc(me.company))}
-        ${kv('الفرع', F.esc(e.branch_name))}
         ${kv('القسم', F.esc(e.department))}
-        ${kv('الجوال', e.phone ? `<span class="num">${F.esc(e.phone)}</span>` : '')}
         ${kv('وقت الدوام', `<span class="num">${e.shift_start} – ${e.shift_end}</span>`)}
         ${kv('مهلة التأخير', `${me.grace_minutes} دقيقة`)}
       </div>

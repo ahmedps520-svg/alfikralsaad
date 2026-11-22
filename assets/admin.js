@@ -66,7 +66,7 @@
     document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === tab));
     document.querySelectorAll('.fab').forEach((f) => f.remove());
     window.scrollTo({ top: 0 });
-    ({ today: loadToday, employees: loadEmployees, records: loadRecords, branches: loadBranches, settings: loadSettings })[tab]();
+    ({ today: loadToday, employees: loadEmployees, records: loadRecords, settings: loadSettings })[tab]();
   }
   const view = (html) => { $('#view').innerHTML = html; };
   const hero = (title, sub, extra) => `
@@ -132,7 +132,7 @@
       if (state.filter === 'late' && r.status !== 'late') return false;
       if (state.filter === 'absent' && b !== 'absent') return false;
       if (state.filter === 'out' && b !== 'out') return false;
-      return !q || (r.name + ' ' + r.code + ' ' + (r.department || '')).toLowerCase().includes(q);
+      return !q || (r.name + ' ' + r.code + ' ' + (r.phone || '') + ' ' + (r.department || '') + ' ' + (r.in_site || '')).toLowerCase().includes(q);
     });
 
     const maxWeek = Math.max(total, ...o.week.map((w) => w.on_time + w.late), 1);
@@ -151,9 +151,9 @@
       const b = bucket(r);
       const pill = b === 'out' ? `${F.statusPill(r.status)}` : F.statusPill(b === 'absent' ? 'absent' : r.status);
       return `<div class="item tap" data-id="${r.id}" style="animation-delay:${Math.min(i, 14) * 30}ms">
-        <div class="avatar">${F.esc(F.initials(r.name))}</div>
+        ${avatar(r)}
         <div class="meta"><div class="t">${F.esc(r.name)}</div>
-          <div class="s">${F.esc([r.department, r.branch_name].filter(Boolean).join(' · ') || 'الرقم ' + r.code)}</div></div>
+          <div class="s">${r.in_site ? '📍 ' + F.esc(r.in_site) : F.esc(r.department || r.phone || '')}</div></div>
         <div class="times">${r.check_in ? `دخول <b class="num">${F.fmtTime(r.check_in, tz)}</b><br>خروج <b class="num">${F.fmtTime(r.check_out, tz)}</b>` : `<span class="num">${r.shift_start}</span>`}</div>
         ${pill}
       </div>`;
@@ -189,7 +189,7 @@
       </div>
 
       <div class="section-title"><span>الموظفون</span></div>
-      <div class="search"><input class="input" id="q" placeholder="ابحث بالاسم أو الرقم الوظيفي" value="${F.esc(state.q)}">${F.ICONS.search}</div>
+      <div class="search"><input class="input" id="q" placeholder="ابحث بالاسم أو رقم الجوال أو الموقع" value="${F.esc(state.q)}">${F.ICONS.search}</div>
       <div class="chips" style="margin-top:10px">${chips}</div>
       <div style="margin-top:6px">${total === 0 ? emptyEmployees() : filtered.length ? `<div class="list">${items}</div>` : '<div class="card empty"><div class="ico">🔎</div>لا توجد نتائج</div>'}</div>
     </div>`);
@@ -236,20 +236,47 @@
       <p class="small">أضف موظفيك ليبدأوا بتسجيل الحضور من جوالاتهم</p><button class="btn" id="goAddEmp">${F.ICONS.plus} إضافة موظف</button></div>`;
   }
 
-  function dayDetail(r) {
+  // Photo cache keeps signed URLs stable between auto-refreshes (they are valid for 1 hour).
+  const photoCache = {};
+  function photo(r, kind) {
+    const url = r[kind + '_photo_url'];
+    if (!url || !r.attendance_id) return null;
+    const k = r.attendance_id + kind, c = photoCache[k];
+    if (c && Date.now() - c.t < 40 * 60e3) return c.url;
+    photoCache[k] = { url, t: Date.now() };
+    return url;
+  }
+  function avatar(r) {
+    const u = photo(r, 'in');
+    return u ? `<div class="avatar photo"><img src="${F.esc(u)}" alt="" loading="lazy"></div>` : `<div class="avatar">${F.esc(F.initials(r.name))}</div>`;
+  }
+  // The proof for one check-in/out: live selfie, time, site, GPS accuracy and a map link.
+  function evidence(r) {
     const tz = state.tz;
+    const side = (kind, label) => {
+      const t = r[kind === 'in' ? 'check_in' : 'check_out'];
+      if (!t) return `<div class="proof empty-proof"><div class="proof-img"><span>${label}<br>لم يُسجّل</span></div></div>`;
+      const u = photo(r, kind), lat = r[kind + '_lat'], lng = r[kind + '_lng'], acc = r[kind + '_accuracy'], site = r[kind + '_site'];
+      return `<div class="proof">
+        ${u ? `<a class="proof-img" href="${F.esc(u)}" target="_blank" rel="noopener"><img src="${F.esc(u)}" alt="صورة ${label}"></a>` : '<div class="proof-img"><span>لا توجد صورة</span></div>'}
+        <div class="proof-meta"><b>${label}</b> <span class="num">${F.fmtTime(t, tz)}</span>
+          ${site ? `<div class="tiny">📍 ${F.esc(site)}</div>` : ''}
+          ${lat != null ? `<a class="tiny" target="_blank" rel="noopener" href="https://maps.google.com/?q=${lat},${lng}">الخريطة ↗</a>${acc != null ? ` <span class="tiny muted">±${acc} م</span>` : ''}` : ''}
+        </div></div>`;
+    };
+    return `<div class="proofs">${side('in', 'الحضور')}${side('out', 'الانصراف')}</div>`;
+  }
+
+  function dayDetail(r) {
     const dur = r.check_in && r.check_out ? F.fmtDuration(new Date(r.check_out) - new Date(r.check_in)) : '—';
-    const map = r.in_lat != null ? `<a class="btn ghost block" target="_blank" rel="noopener" href="https://maps.google.com/?q=${r.in_lat},${r.in_lng}">${F.ICONS.pin} عرض موقع البصمة</a>` : '';
-    F.sheet(`<div class="row" style="margin-bottom:14px"><div class="avatar" style="background:color-mix(in srgb,var(--brand) 12%,transparent);color:var(--brand);border:0">${F.esc(F.initials(r.name))}</div>
-      <div style="flex:1"><h3 style="margin:0">${F.esc(r.name)}</h3><div class="muted small">${F.esc(r.job_title || '')} <span class="code-tag num">${F.esc(r.code)}</span></div></div>${F.statusPill(r.check_in ? r.status : 'absent')}</div>
-      <div class="card" style="box-shadow:none">
+    F.sheet(`<div class="row" style="margin-bottom:14px">${avatar(r)}
+      <div style="flex:1"><h3 style="margin:0">${F.esc(r.name)}</h3><div class="muted small">${F.esc(r.job_title || '')} <span class="code-tag num">${F.esc(r.phone || r.code)}</span></div></div>${F.statusPill(r.check_in ? r.status : 'absent')}</div>
+      ${r.check_in ? evidence(r) : '<div class="card empty" style="box-shadow:none"><div class="ico">🕒</div>لم يسجّل حضوره في هذا اليوم</div>'}
+      <div class="card" style="box-shadow:none;margin-top:14px">
         <div class="kv"><span class="k">الدوام</span><span class="v num">${r.shift_start} – ${r.shift_end}</span></div>
-        <div class="kv"><span class="k">الحضور</span><span class="v num">${F.fmtTime(r.check_in, tz)}</span></div>
-        <div class="kv"><span class="k">الانصراف</span><span class="v num">${F.fmtTime(r.check_out, tz)}</span></div>
         <div class="kv"><span class="k">مدة العمل</span><span class="v">${dur}</span></div>
-        ${r.in_distance != null ? `<div class="kv"><span class="k">المسافة عن الفرع</span><span class="v">${r.in_distance} م</span></div>` : ''}
       </div>
-      <div class="stack" style="margin-top:14px">${map}<button class="btn ghost block" data-close>إغلاق</button></div>`);
+      <button class="btn ghost block" data-close style="margin-top:14px">إغلاق</button>`);
   }
 
   /* ───────── EMPLOYEES ───────── */
@@ -260,12 +287,12 @@
   function renderEmployees() {
     const emps = state.list.employees;
     const q = state.empQ.trim().toLowerCase();
-    const list = emps.filter((e) => !q || (e.name + ' ' + e.code + ' ' + (e.department || '') + ' ' + (e.job_title || '')).toLowerCase().includes(q));
+    const list = emps.filter((e) => !q || (e.name + ' ' + e.code + ' ' + (e.phone || '') + ' ' + (e.department || '') + ' ' + (e.job_title || '')).toLowerCase().includes(q));
     const active = emps.filter((e) => e.active).length;
     const items = list.map((e, i) => `<div class="item tap" data-id="${e.id}" style="animation-delay:${Math.min(i, 14) * 30}ms">
       <div class="avatar" ${e.active ? '' : 'style="filter:grayscale(1);opacity:.6"'}>${F.esc(F.initials(e.name))}</div>
-      <div class="meta"><div class="t">${F.esc(e.name)} <span class="code-tag num">${F.esc(e.code)}</span></div>
-        <div class="s">${F.esc([e.job_title, e.department, e.branch_name].filter(Boolean).join(' · ') || '—')}</div></div>
+      <div class="meta"><div class="t">${F.esc(e.name)}</div>
+        <div class="s"><span class="num">${F.esc(e.phone || '')}</span>${[e.job_title, e.department].filter(Boolean).length ? ' · ' + F.esc([e.job_title, e.department].filter(Boolean).join(' · ')) : ''}</div></div>
       ${e.active ? `<span class="tiny muted num">${e.shift_start}–${e.shift_end}</span>` : '<span class="pill mute">موقوف</span>'}
     </div>`).join('');
     view(hero('الموظفون', `${active.toLocaleString(F.LOCALE)} نشط من ${emps.length.toLocaleString(F.LOCALE)}`) + `
@@ -289,23 +316,18 @@
 
   function employeeForm(emp) {
     const e = emp || { active: true, shift_start: '08:00', shift_end: '16:00' };
-    const branches = state.list.branches;
-    const nextCode = String(1000 + state.list.employees.length + 1);
-    const opts = '<option value="">بدون فرع (لن يستطيع التسجيل)</option>' + branches.map((b) => `<option value="${b.id}" ${b.id === e.branch_id ? 'selected' : ''}>${F.esc(b.name)}</option>`).join('');
     F.sheet(`<h3>${emp ? 'تعديل بيانات الموظف' : 'إضافة موظف جديد'}</h3>
       <form id="empForm">
         <label class="field"><span>الاسم الكامل *</span><input class="input" name="name" value="${F.esc(e.name || '')}" required></label>
         <div class="form-row">
-          <label class="field"><span>الرقم الوظيفي *</span><input class="input ltr" name="code" inputmode="numeric" value="${F.esc(e.code || nextCode)}" required></label>
+          <label class="field"><span>رقم الجوال * (للدخول)</span><input class="input ltr" name="phone" type="tel" inputmode="tel" value="${F.esc(e.phone || '')}" placeholder="05xxxxxxxx" required></label>
           <label class="field"><span>${emp ? 'رمز سري جديد' : 'الرمز السري *'}</span><input class="input ltr" name="pin" inputmode="numeric" pattern="[0-9]{4,8}" maxlength="8" placeholder="${emp ? 'اتركه فارغاً' : '4-8 أرقام'}" ${emp ? '' : 'required'} value="${emp ? '' : String(Math.floor(1000 + Math.random() * 9000))}"></label>
         </div>
         <div class="form-row">
           <label class="field"><span>المسمى الوظيفي</span><input class="input" name="job_title" value="${F.esc(e.job_title || '')}"></label>
           <label class="field"><span>القسم</span><input class="input" name="department" value="${F.esc(e.department || '')}"></label>
         </div>
-        <label class="field"><span>رقم الجوال</span><input class="input ltr" name="phone" type="tel" inputmode="tel" value="${F.esc(e.phone || '')}" placeholder="05xxxxxxxx"></label>
-        <label class="field"><span>الفرع (مقر العمل)</span><select class="input" name="branch_id">${opts}</select>
-          <small class="tiny muted" style="display:block;margin-top:6px">يسجّل الموظف حضوره فقط من داخل موقع فرعه</small></label>
+        <label class="field"><span>الرقم الوظيفي (اختياري)</span><input class="input ltr" name="code" inputmode="numeric" value="${F.esc(e.code || '')}" placeholder="يُولَّد تلقائياً"></label>
         <div class="form-row">
           <label class="field"><span>بداية الدوام</span><input class="input" type="time" name="shift_start" value="${e.shift_start}"></label>
           <label class="field"><span>نهاية الدوام</span><input class="input" type="time" name="shift_end" value="${e.shift_end}"></label>
@@ -331,11 +353,11 @@
             F.sheet(`<div class="confirm-box"><div class="ico" style="background:var(--ok-bg);color:var(--ok)">✓</div><h3>تمت إضافة ${F.esc(p.name)}</h3>
               <p class="muted small">أرسل بيانات الدخول للموظف:</p></div>
               <div class="card" style="box-shadow:none"><div class="kv"><span class="k">الرابط</span><span class="v tiny num">${F.esc(location.href.replace(/admin\.html.*$/, ''))}</span></div>
-              <div class="kv"><span class="k">الرقم الوظيفي</span><span class="v num">${F.esc(p.code)}</span></div>
+              <div class="kv"><span class="k">رقم الجوال</span><span class="v num">${F.esc(p.phone)}</span></div>
               <div class="kv"><span class="k">الرمز السري</span><span class="v num">${F.esc(p.pin)}</span></div></div>
               <div class="grid-2" style="margin-top:14px"><button class="btn ghost" id="shareBtn">مشاركة</button><button class="btn" data-close>تم</button></div>`, (el2) => {
               $('#shareBtn', el2).onclick = () => {
-                const text = `مرحباً ${p.name}\nرابط تسجيل الحضور: ${location.href.replace(/admin\.html.*$/, '')}\nالرقم الوظيفي: ${p.code}\nالرمز السري: ${p.pin}`;
+                const text = `مرحباً ${p.name}\nرابط تسجيل الحضور: ${location.href.replace(/admin\.html.*$/, '')}\nرقم الجوال: ${p.phone}\nالرمز السري: ${p.pin}`;
                 if (navigator.share) navigator.share({ title: 'الفكر السعد', text }).catch(() => {});
                 else { window.open('https://wa.me/?text=' + encodeURIComponent(text), '_blank'); }
               };
@@ -363,7 +385,7 @@
       const today = F.todayISO(state.tz);
       if (!state.recTo) { state.recTo = today; state.recFrom = F.addDays(today, -6); }
       if (!state.records || force) view(hero('سجلات الحضور', 'تقارير وتصدير') + skeleton());
-      state.records = await call('alfikr_admin_attendance', { p_from: state.recFrom, p_to: state.recTo, p_employee: state.recEmp || null });
+      state.records = await call('alfikr_admin_attendance', { p_from: state.recFrom, p_to: state.recTo, p_employee: state.recEmp || null, p_photos: true });
       renderRecords();
     } catch (e) { fail(e); }
   }
@@ -378,8 +400,8 @@
       if (r.work_date !== lastDate) { lastDate = r.work_date; head = `<div class="item" style="background:var(--surface-2);padding:8px 16px;font-size:12px;font-weight:700;color:var(--muted)">${F.fmtDate(r.work_date, { year: 'numeric' })}</div>`; }
       const dur = r.check_in && r.check_out ? F.fmtDuration(new Date(r.check_out) - new Date(r.check_in)) : 'لم ينصرف';
       return head + `<div class="item tap" data-id="${r.id}" style="animation-delay:${Math.min(i, 14) * 25}ms">
-        <div class="avatar">${F.esc(F.initials(r.name))}</div>
-        <div class="meta"><div class="t">${F.esc(r.name)}</div><div class="s"><span class="num">${F.fmtTime(r.check_in, tz)}</span> ← <span class="num">${F.fmtTime(r.check_out, tz)}</span> · ${dur}</div></div>
+        ${avatar(r)}
+        <div class="meta"><div class="t">${F.esc(r.name)}</div><div class="s"><span class="num">${F.fmtTime(r.check_in, tz)}</span> ← <span class="num">${F.fmtTime(r.check_out, tz)}</span> · ${dur}${r.in_site ? ' · ' + F.esc(r.in_site) : ''}</div></div>
         ${F.statusPill(r.status)}</div>`;
     }).join('');
     view(hero('سجلات الحضور', 'تقارير وتصدير') + `
@@ -410,12 +432,8 @@
   }
   function recordDetail(r) {
     F.sheet(`<h3>${F.esc(r.name)}</h3><p class="muted small" style="margin-top:-10px">${F.fmtDate(r.work_date, { year: 'numeric' })}</p>
-      <div class="card" style="box-shadow:none">
-        <div class="kv"><span class="k">الحضور</span><span class="v num">${F.fmtTime(r.check_in, state.tz)}</span></div>
-        <div class="kv"><span class="k">الانصراف</span><span class="v num">${F.fmtTime(r.check_out, state.tz)}</span></div>
-        <div class="kv"><span class="k">الحالة</span><span class="v">${F.statusPill(r.status)}</span></div>
-        ${r.in_distance != null ? `<div class="kv"><span class="k">المسافة عند الحضور</span><span class="v">${r.in_distance} م</span></div>` : ''}
-      </div>
+      <div style="margin-bottom:12px">${F.statusPill(r.status)}</div>
+      ${evidence(r)}
       <button class="btn soft-danger block" id="recDel" style="margin-top:14px">${F.ICONS.trash} حذف السجل</button>
       <button class="btn ghost block" data-close style="margin-top:10px">إغلاق</button>`, (el, close) => {
       $('#recDel', el).onclick = async () => {
@@ -428,9 +446,11 @@
   function exportCsv() {
     const tz = state.tz;
     const t = (iso) => (iso ? new Date(iso).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: tz }) : '');
-    const rows = [['التاريخ', 'الرقم الوظيفي', 'الاسم', 'القسم', 'الحضور', 'الانصراف', 'الساعات', 'الحالة']];
+    const rows = [['التاريخ', 'الاسم', 'الجوال', 'القسم', 'الحضور', 'موقع الحضور', 'إحداثيات الحضور', 'الانصراف', 'موقع الانصراف', 'إحداثيات الانصراف', 'الساعات', 'الحالة']];
+    const ll = (lat, lng) => (lat != null ? `${lat},${lng}` : '');
     state.records.slice().reverse().forEach((r) => rows.push([
-      r.work_date, r.code, r.name, r.department || '', t(r.check_in), t(r.check_out),
+      r.work_date, r.name, r.phone || '', r.department || '', t(r.check_in), r.in_site || '', ll(r.in_lat, r.in_lng),
+      t(r.check_out), r.out_site || '', ll(r.out_lat, r.out_lng),
       r.check_in && r.check_out ? ((new Date(r.check_out) - new Date(r.check_in)) / 36e5).toFixed(2) : '',
       (F.STATUS[r.status] || {}).label || r.status,
     ]));
@@ -440,79 +460,6 @@
     a.download = `attendance_${state.recFrom}_${state.recTo}.csv`;
     document.body.appendChild(a); a.click(); a.remove();
     F.toast('تم تصدير الملف', 'ok');
-  }
-
-  /* ───────── BRANCHES ───────── */
-  async function loadBranches(force) {
-    if (!state.list) view(hero('الفروع', 'مواقع العمل ونطاق البصمة') + skeleton());
-    try { await ensureList(force === true); renderBranches(); } catch (e) { fail(e); }
-  }
-  function renderBranches() {
-    const bs = state.list.branches;
-    const cards = bs.map((b, i) => `<div class="card branch-card tap" data-id="${b.id}" style="cursor:pointer;animation:itemIn .4s ${i * 50}ms both">
-      <div class="row between"><div class="row"><div class="avatar" style="background:color-mix(in srgb,var(--gold) 16%,transparent);color:var(--gold);border:0">${F.ICONS.pin.replace('<svg', '<svg width="22" height="22"')}</div>
-      <div><div class="bold">${F.esc(b.name)}</div><div class="tiny muted">${b.employees} موظف</div></div></div>
-      ${b.lat != null ? `<span class="pill ok">نطاق ${b.radius_m} م</span>` : '<span class="pill warn">بدون موقع</span>'}</div>
-      ${b.lat != null ? `<div class="tiny muted num" style="margin-top:10px">${b.lat.toFixed(5)}, ${b.lng.toFixed(5)}</div>` : '<div class="tiny" style="margin-top:10px;color:var(--bad)">موظفو هذا الفرع لا يستطيعون التسجيل حتى تحدد موقعه</div>'}
-    </div>`).join('');
-    view(hero('الفروع', 'مواقع العمل ونطاق البصمة') + `<div class="page"><div class="lift" style="position:relative">
-      ${bs.length ? cards : `<div class="card empty"><div class="ico">📍</div><div class="bold" style="color:var(--ink)">لا توجد فروع</div><p class="small">أضف فرعاً وحدد موقعه، فلا يستطيع الموظف تسجيل البصمة إلا داخل مقر العمل</p><button class="btn" id="addB">${F.ICONS.plus} إضافة فرع</button></div>`}
-      </div></div>`);
-    bindRefresh(() => loadBranches(true));
-    document.querySelectorAll('.branch-card').forEach((c) => c.onclick = () => branchForm(bs.find((b) => b.id === c.dataset.id)));
-    const ab = $('#addB'); if (ab) ab.onclick = () => branchForm();
-    addFab(() => branchForm());
-  }
-  function branchForm(br) {
-    const b = br || { radius_m: 150 };
-    F.sheet(`<h3>${br ? 'تعديل الفرع' : 'فرع جديد'}</h3>
-      <form id="brForm">
-        <label class="field"><span>اسم الفرع *</span><input class="input" name="name" value="${F.esc(b.name || '')}" placeholder="مثال: المقر الرئيسي" required></label>
-        <button type="button" class="btn ghost block" id="useLoc" style="margin-bottom:14px">${F.ICONS.pin} استخدم موقعي الحالي</button>
-        <div class="form-row">
-          <label class="field"><span>خط العرض</span><input class="input ltr" name="lat" inputmode="decimal" value="${b.lat ?? ''}"></label>
-          <label class="field"><span>خط الطول</span><input class="input ltr" name="lng" inputmode="decimal" value="${b.lng ?? ''}"></label>
-        </div>
-        <label class="field"><span>نطاق البصمة: <b id="radV">${b.radius_m}</b> متر</span>
-          <input type="range" name="radius_m" min="30" max="1000" step="10" value="${b.radius_m}" style="width:100%;accent-color:var(--brand)"></label>
-        <p class="tiny muted" style="margin-top:-6px">لا يستطيع الموظف تسجيل الحضور أو الانصراف إلا وموقعه مفعّل وداخل هذا النطاق. بدون تحديد موقع الفرع لن يتمكن موظفوه من التسجيل.</p>
-        <a class="small" id="mapLink" target="_blank" rel="noopener" ${b.lat != null ? `href="https://maps.google.com/?q=${b.lat},${b.lng}"` : 'style="display:none"'}>عرض على الخريطة ↗</a>
-        <button class="btn block" type="submit" id="brSave" style="margin-top:14px">${br ? 'حفظ' : 'إضافة الفرع'}</button>
-        ${br ? `<button class="btn soft-danger block" type="button" id="brDel" style="margin-top:10px">${F.ICONS.trash} حذف الفرع</button>` : ''}
-      </form>`, (el, close) => {
-      const form = $('#brForm', el);
-      form.radius_m.oninput = () => { $('#radV', el).textContent = form.radius_m.value; };
-      const syncMap = () => {
-        const a = $('#mapLink', el);
-        if (form.lat.value && form.lng.value) { a.href = `https://maps.google.com/?q=${form.lat.value},${form.lng.value}`; a.style.display = ''; }
-      };
-      form.lat.oninput = form.lng.oninput = syncMap;
-      $('#useLoc', el).onclick = (ev) => {
-        const btn = ev.currentTarget;
-        if (!navigator.geolocation) return F.toast('جهازك لا يدعم تحديد الموقع', 'bad');
-        F.busy(btn, true);
-        navigator.geolocation.getCurrentPosition((p) => {
-          form.lat.value = p.coords.latitude.toFixed(6); form.lng.value = p.coords.longitude.toFixed(6);
-          syncMap(); F.busy(btn, false); F.toast(`تم تحديد الموقع (دقة ${Math.round(p.coords.accuracy)} م)`, 'ok');
-        }, () => { F.busy(btn, false); F.toast(F.errorText({ code: 'location_required' }), 'bad'); }, { enableHighAccuracy: true, timeout: 15000 });
-      };
-      form.onsubmit = async (ev) => {
-        ev.preventDefault();
-        const p = Object.fromEntries(new FormData(form).entries());
-        if ((p.lat && !p.lng) || (!p.lat && p.lng) || (p.lat && (isNaN(+p.lat) || isNaN(+p.lng)))) return F.toast('الإحداثيات غير صحيحة', 'bad');
-        if (br) p.id = br.id;
-        const btn = $('#brSave', el);
-        F.busy(btn, true);
-        try { await call('alfikr_admin_save_branch', { p }); close(); F.toast('تم حفظ الفرع', 'ok'); await ensureList(true); renderBranches(); }
-        catch (e) { fail(e); } finally { F.busy(btn, false); }
-      };
-      const del = $('#brDel', el);
-      if (del) del.onclick = async () => {
-        close();
-        if (!(await F.confirmSheet('حذف الفرع', 'سيتم إلغاء ربط الموظفين بهذا الفرع.', 'حذف'))) return;
-        try { await call('alfikr_admin_delete_branch', { p_id: br.id }); F.toast('تم حذف الفرع', 'ok'); await ensureList(true); renderBranches(); } catch (e) { fail(e); }
-      };
-    });
   }
 
   /* ───────── SETTINGS ───────── */

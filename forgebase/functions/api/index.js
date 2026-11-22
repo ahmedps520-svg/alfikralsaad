@@ -1,12 +1,12 @@
 // الفكر السعد — ForgeBase edge function `api`
 // The website calls POST /functions/v1/api with { action, ...args }.
 // Tables are locked with row-level security (no policies), so this function is the
-// only way in. It checks PINs, passwords and session tokens, and enforces the
-// workplace location rule for every check-in and check-out.
+// only way in. Employees sign in with phone number + PIN. Every check-in/out must carry
+// a live selfie (stored in the private `selfies` bucket) and the phone's GPS position,
+// so the admin can see who checked in, where, and when. Employees can work anywhere.
 
 const PBKDF2_ITER = 120000;
-const MAX_ACCURACY_M = 150;      // reject fixes less precise than this
-const ACCURACY_ALLOWANCE_M = 25; // small tolerance on top of the branch radius
+const MAX_PHOTO_BYTES = 600 * 1024;
 const enc = new TextEncoder();
 
 class Fail extends Error {
@@ -58,13 +58,13 @@ function addDays(iso, n) {
 const hmToMin = (hm) => { const [h, m] = String(hm || '00:00').split(':').map(Number); return h * 60 + (m || 0); };
 const validHm = (s) => typeof s === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(s.slice(0, 5));
 const validDate = (s) => typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s);
-function distanceM(lat1, lng1, lat2, lng2) {
-  const R = 6371000, r = (x) => (x * Math.PI) / 180;
-  const a = Math.sin(r(lat2 - lat1) / 2) ** 2 + Math.cos(r(lat1)) * Math.cos(r(lat2)) * Math.sin(r(lng2 - lng1) / 2) ** 2;
-  return 2 * R * Math.asin(Math.sqrt(a));
-}
 const num = (v) => (v === null || v === undefined || v === '' ? null : Number(v));
 const str = (v, max = 120) => (v === null || v === undefined ? null : String(v).trim().slice(0, max) || null);
+// Phone numbers match on their last 9 digits, so 0501234567, +966501234567 and 966501234567 are the same.
+function phoneKey(v) {
+  const digits = String(v || '').replace(/[٠-٩]/g, (d) => '٠١٢٣٤٥٦٧٨٩'.indexOf(d)).replace(/\D/g, '');
+  return digits.length >= 9 ? digits.slice(-9) : null;
+}
 
 /* ───────── database (REST with the service key) ───────── */
 function makeDb(ctx) {
@@ -90,11 +90,52 @@ function makeDb(ctx) {
     insert: async (t, row) => { const r = await req('POST', t, row, 'return=representation'); return Array.isArray(r) ? r[0] : r; },
     update: (t, query, patch) => req('PATCH', `${t}?${query}`, patch, 'return=representation'),
     remove: (t, query) => req('DELETE', `${t}?${query}`),
+    async upload(bucket, path, bytes, type) {
+      const res = await fetch(`${ctx.env.FORGEBASE_URL}/storage/v1/object/${bucket}/${path}`, {
+        method: 'POST', headers: { apikey: key, authorization: `Bearer ${key}`, 'content-type': type, 'x-upsert': 'true' }, body: bytes,
+      });
+      if (!res.ok) { console.error('upload failed', res.status, await res.text()); throw new Fail('photo_upload_failed', 500); }
+    },
+    async signed(bucket, path, expiresIn = 3600) {
+      if (!path) return null;
+      const res = await fetch(`${ctx.env.FORGEBASE_URL}/storage/v1/object/sign/${bucket}/${path}`, {
+        method: 'POST', headers: { apikey: key, authorization: `Bearer ${key}`, 'content-type': 'application/json' }, body: JSON.stringify({ expiresIn }),
+      });
+      if (!res.ok) { console.error('sign failed', res.status, await res.text()); return null; }
+      const d = await res.json();
+      const u = d.signedURL || d.signedUrl;
+      if (!u) return null;
+      return /^https?:/.test(u) ? u : `${ctx.env.FORGEBASE_URL}/storage/v1${u.startsWith('/') ? '' : '/'}${u}`;
+    },
+    removeFiles(bucket, paths) {
+      if (!paths.length) return Promise.resolve();
+      return fetch(`${ctx.env.FORGEBASE_URL}/storage/v1/object/${bucket}`, {
+        method: 'DELETE', headers: { apikey: key, authorization: `Bearer ${key}`, 'content-type': 'application/json' }, body: JSON.stringify({ prefixes: paths }),
+      }).catch(() => {});
+    },
   };
 }
 
-async function settings(db) {
-  return (await db.one('settings', 'id=eq.1&select=*')) || { company_name: 'الفكر السعد', timezone: 'Asia/Riyadh', grace_minutes: 15 };
+// Decodes the selfie the app sends (data URL or base64 JPEG/WebP) and checks it is a real image.
+function decodePhoto(v) {
+  if (typeof v !== 'string' || v.length < 100) throw new Fail('photo_required');
+  const m = /^data:(image\/(?:jpeg|webp));base64,(.+)$/.exec(v);
+  const type = m ? m[1] : 'image/jpeg';
+  const bytes = Buffer.from(m ? m[2] : v, 'base64');
+  if (bytes.length < 2000 || bytes.length > MAX_PHOTO_BYTES) throw new Fail('photo_required');
+  const isJpeg = bytes[0] === 0xff && bytes[1] === 0xd8;
+  const isWebp = bytes.slice(0, 4).toString() === 'RIFF' && bytes.slice(8, 12).toString() === 'WEBP';
+  if (!isJpeg && !isWebp) throw new Fail('photo_required');
+  return { bytes, type: isWebp ? 'image/webp' : 'image/jpeg', ext: isWebp ? 'webp' : 'jpg' };
+}
+
+// Settings rarely change, so each running instance keeps them for 30 seconds.
+let settingsCache = null;
+async function settings(db, fresh = false) {
+  if (!fresh && settingsCache && Date.now() - settingsCache.t < 30e3) return settingsCache.v;
+  const v = (await db.one('settings', 'id=eq.1&select=*')) || { company_name: 'الفكر السعد', timezone: 'Asia/Riyadh', grace_minutes: 15 };
+  settingsCache = { v, t: Date.now() };
+  return v;
 }
 
 async function checkRate(db, ident, max, windowMs) {
@@ -125,23 +166,30 @@ async function requireEmployee(db, token) {
 }
 const requireAdmin = (db, token) => session(db, token, 'admin');
 
-function empOut(e, branches) {
-  const b = branches.find((x) => x.id === e.branch_id);
+function empOut(e) {
   return {
     id: e.id, code: e.code, name: e.name, phone: e.phone, job_title: e.job_title, department: e.department,
-    branch_id: e.branch_id, branch_name: b ? b.name : null,
     shift_start: e.shift_start, shift_end: e.shift_end, active: !!Number(e.active),
   };
 }
-const branchOut = (b) => (b ? { id: b.id, name: b.name, lat: num(b.lat), lng: num(b.lng), radius_m: Number(b.radius_m) } : null);
+
+// One attendance record for the admin, with short-lived signed URLs for its selfies.
+async function recordOut(db, r, withPhotos = true) {
+  const [inUrl, outUrl] = withPhotos ? await Promise.all([db.signed('selfies', r.in_photo), db.signed('selfies', r.out_photo)]) : [null, null];
+  return {
+    attendance_id: r.id, check_in: r.check_in, check_out: r.check_out,
+    in_lat: r.in_lat, in_lng: r.in_lng, in_accuracy: r.in_accuracy, in_site: r.in_site, in_photo_url: inUrl,
+    out_lat: r.out_lat, out_lng: r.out_lng, out_accuracy: r.out_accuracy, out_site: r.out_site, out_photo_url: outUrl,
+  };
+}
 
 /* ───────── employee actions ───────── */
 const actions = {
   async emp_login(db, a) {
-    const code = str(a.p_code, 40);
-    const ident = 'emp:' + String(code || '').toLowerCase();
+    const key = phoneKey(a.p_phone);
+    const ident = 'emp:' + (key || 'invalid');
     await checkRate(db, ident, 6, 10 * 60e3);
-    const e = code ? await db.one('employees', `code=eq.${q(code)}&select=*`) : null;
+    const e = key ? await db.one('employees', `phone_key=eq.${q(key)}&select=*`) : null;
     if (!e || !Number(e.active) || !(await verifySecret(String(a.p_pin || ''), e.pin_hash))) {
       await recordFail(db, ident);
       throw new Fail('invalid_login', 401);
@@ -156,59 +204,75 @@ const actions = {
   },
 
   async emp_me(db, a) {
-    const e = await requireEmployee(db, a.p_token);
-    const s = await settings(db);
-    const branches = await db.select('branches', 'select=*');
+    const [e, s] = await Promise.all([requireEmployee(db, a.p_token), settings(db)]);
     const today = localParts(s.timezone).date;
     const hist = await db.select('attendance',
-      `employee_id=eq.${q(e.id)}&work_date=gt.${addDays(today, -31)}&select=work_date,check_in,check_out,status,in_distance,out_distance&order=work_date.desc`);
+      `employee_id=eq.${q(e.id)}&work_date=gt.${addDays(today, -31)}&select=work_date,check_in,check_out,status,in_site,out_site&order=work_date.desc`);
+    const sites = [];
+    hist.forEach((h) => [h.in_site, h.out_site].forEach((x) => { if (x && !sites.includes(x) && sites.length < 6) sites.push(x); }));
     return {
-      employee: empOut(e, branches),
+      employee: empOut(e),
       company: s.company_name, timezone: s.timezone, grace_minutes: Number(s.grace_minutes),
       server_now: nowIso(),
-      branch: branchOut(branches.find((b) => b.id === e.branch_id)),
       today: hist.find((h) => h.work_date === today) || null,
       history: hist,
+      recent_sites: sites,
     };
   },
 
-  // Check-in / check-out: ONLY allowed with a live location inside the workplace radius.
+  // Check-in / check-out: needs a live selfie AND the phone's GPS position (location must be on).
+  // Employees can be at any site; the position, accuracy and site name are logged for the admin.
   async emp_punch(db, a) {
-    const e = await requireEmployee(db, a.p_token);
+    const [e, s] = await Promise.all([requireEmployee(db, a.p_token), settings(db)]);
     const type = a.p_type;
     if (type !== 'in' && type !== 'out') throw new Fail('bad_type');
-    const b = e.branch_id ? await db.one('branches', `id=eq.${q(e.branch_id)}&select=*`) : null;
-    if (!b || b.lat === null || b.lng === null) throw new Fail('no_workplace');
     const lat = num(a.p_lat), lng = num(a.p_lng), acc = num(a.p_accuracy);
     if (lat === null || lng === null || !isFinite(lat) || !isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
       throw new Fail('location_required');
     }
-    if (acc === null || !isFinite(acc) || acc > MAX_ACCURACY_M) throw new Fail('weak_location');
-    const d = Math.round(distanceM(lat, lng, Number(b.lat), Number(b.lng)));
-    if (d > Number(b.radius_m) + Math.min(acc, ACCURACY_ALLOWANCE_M)) throw new Fail(`outside_area:${d}`);
+    const photo = decodePhoto(a.p_photo);
+    const site = str(a.p_site, 80);
 
-    const s = await settings(db);
     const local = localParts(s.timezone);
     const rec = await db.one('attendance', `employee_id=eq.${q(e.id)}&work_date=eq.${local.date}&select=*`);
+    if (type === 'in' && rec && rec.check_in) throw new Fail('already_checked_in');
+    if (type === 'out' && (!rec || !rec.check_in)) throw new Fail('not_checked_in');
+    if (type === 'out' && rec.check_out) throw new Fail('already_checked_out');
+
+    const path = `${e.id}/${local.date}-${type}-${hex(crypto.getRandomValues(new Uint8Array(4)))}.${photo.ext}`;
+    const accuracy = acc !== null && isFinite(acc) ? Math.round(acc) : null;
+    // The photo upload and the record write run in parallel; a failed upload undoes the record.
+    const upload = db.upload('selfies', path, photo.bytes, photo.type);
+
     if (type === 'in') {
-      if (rec && rec.check_in) throw new Fail('already_checked_in');
       const status = local.minutes > hmToMin(e.shift_start) + Number(s.grace_minutes) ? 'late' : 'present';
-      const row = await db.insert('attendance', {
-        id: uuid(), employee_id: e.id, work_date: local.date, check_in: nowIso(),
-        in_lat: lat, in_lng: lng, in_distance: d, status,
+      const id = uuid();
+      const write = db.insert('attendance', {
+        id, employee_id: e.id, work_date: local.date, check_in: nowIso(),
+        in_lat: lat, in_lng: lng, in_accuracy: accuracy, in_site: site, in_photo: path, status,
       }).catch((err) => { if (err.status === 409) throw new Fail('already_checked_in'); throw err; });
-      return { ok: true, status: row.status, check_in: row.check_in, check_out: null, distance: d };
+      const [up, wr] = await Promise.allSettled([upload, write]);
+      if (wr.status === 'rejected') { if (up.status === 'fulfilled') db.removeFiles('selfies', [path]); throw wr.reason; }
+      if (up.status === 'rejected') { await db.remove('attendance', `id=eq.${q(id)}`); throw up.reason; }
+      return { ok: true, status: wr.value.status, check_in: wr.value.check_in, check_out: null };
     }
-    if (!rec || !rec.check_in) throw new Fail('not_checked_in');
-    if (rec.check_out) throw new Fail('already_checked_out');
-    const [row] = await db.update('attendance', `id=eq.${q(rec.id)}`, { check_out: nowIso(), out_lat: lat, out_lng: lng, out_distance: d });
-    return { ok: true, status: row.status, check_in: row.check_in, check_out: row.check_out, distance: d };
+    const write = db.update('attendance', `id=eq.${q(rec.id)}`, {
+      check_out: nowIso(), out_lat: lat, out_lng: lng, out_accuracy: accuracy, out_site: site, out_photo: path,
+    });
+    const [up, wr] = await Promise.allSettled([upload, write]);
+    if (wr.status === 'rejected') { if (up.status === 'fulfilled') db.removeFiles('selfies', [path]); throw wr.reason; }
+    if (up.status === 'rejected') {
+      await db.update('attendance', `id=eq.${q(rec.id)}`, { check_out: null, out_lat: null, out_lng: null, out_accuracy: null, out_site: null, out_photo: null });
+      throw up.reason;
+    }
+    const row = wr.value[0];
+    return { ok: true, status: row.status, check_in: row.check_in, check_out: row.check_out };
   },
 
   /* ───────── admin actions ───────── */
   async admin_login(db, a) {
     await checkRate(db, 'admin', 8, 15 * 60e3);
-    const s = await settings(db);
+    const s = await settings(db, true);
     if (!(await verifySecret(String(a.p_password || ''), s.admin_pass_hash))) {
       await recordFail(db, 'admin');
       throw new Fail('invalid_login', 401);
@@ -223,26 +287,23 @@ const actions = {
   },
 
   async admin_overview(db, a) {
-    await requireAdmin(db, a.p_token);
-    const s = await settings(db);
+    const [, s] = await Promise.all([requireAdmin(db, a.p_token), settings(db)]);
     const today = localParts(s.timezone).date;
     const date = validDate(a.p_date) ? a.p_date : today;
-    const [emps, branches, att] = await Promise.all([
+    const [emps, att] = await Promise.all([
       db.select('employees', 'active=eq.1&select=*'),
-      db.select('branches', 'select=*'),
       db.select('attendance', `work_date=gte.${addDays(date, -6)}&work_date=lte.${date}&select=*`),
     ]);
     const active = new Set(emps.map((e) => e.id));
-    const rows = emps.map((e) => {
+    const rows = await Promise.all(emps.map(async (e) => {
       const r = att.find((x) => x.employee_id === e.id && x.work_date === date);
-      const b = branches.find((x) => x.id === e.branch_id);
       return {
-        id: e.id, code: e.code, name: e.name, department: e.department, job_title: e.job_title,
-        branch_name: b ? b.name : null, shift_start: e.shift_start, shift_end: e.shift_end,
-        check_in: r ? r.check_in : null, check_out: r ? r.check_out : null, status: r ? r.status : 'absent',
-        in_distance: r ? r.in_distance : null, in_lat: r ? r.in_lat : null, in_lng: r ? r.in_lng : null,
+        id: e.id, code: e.code, name: e.name, phone: e.phone, department: e.department, job_title: e.job_title,
+        shift_start: e.shift_start, shift_end: e.shift_end, status: r ? r.status : 'absent',
+        ...(r ? await recordOut(db, r) : { attendance_id: null, check_in: null, check_out: null }),
       };
-    }).sort((x, y) => (x.check_in && y.check_in ? x.check_in.localeCompare(y.check_in) : x.check_in ? -1 : y.check_in ? 1 : x.name.localeCompare(y.name, 'ar')));
+    }));
+    rows.sort((x, y) => (x.check_in && y.check_in ? x.check_in.localeCompare(y.check_in) : x.check_in ? -1 : y.check_in ? 1 : x.name.localeCompare(y.name, 'ar')));
     const week = [];
     for (let i = 6; i >= 0; i--) {
       const d = addDays(date, -i);
@@ -253,15 +314,10 @@ const actions = {
   },
 
   async admin_list(db, a) {
-    await requireAdmin(db, a.p_token);
-    const [emps, branches, s] = await Promise.all([
-      db.select('employees', 'select=*&order=created_at.asc'),
-      db.select('branches', 'select=*&order=created_at.asc'),
-      settings(db),
-    ]);
+    // Data is fetched alongside the session check, but nothing is returned unless the check passes.
+    const [, emps, s] = await Promise.all([requireAdmin(db, a.p_token), db.select('employees', 'select=*&order=created_at.asc'), settings(db)]);
     return {
-      employees: emps.map((e) => empOut(e, branches)),
-      branches: branches.map((b) => ({ ...branchOut(b), employees: emps.filter((e) => e.branch_id === b.id).length })),
+      employees: emps.map(empOut),
       settings: { company_name: s.company_name, timezone: s.timezone, grace_minutes: Number(s.grace_minutes) },
     };
   },
@@ -270,18 +326,23 @@ const actions = {
     await requireAdmin(db, a.p_token);
     const p = a.p || {};
     const id = str(p.id, 64);
-    const name = str(p.name), code = str(p.code, 40);
-    if (!name || !code) throw new Fail('missing_fields');
+    const name = str(p.name), phone = str(p.phone, 30), key = phoneKey(p.phone);
+    if (!name) throw new Fail('missing_fields');
+    if (!key) throw new Fail('bad_phone');
     const pin = str(p.pin, 20);
     if (pin !== null && !/^\d{4,8}$/.test(pin)) throw new Fail('bad_pin');
     if (!id && pin === null) throw new Fail('bad_pin');
+    const dupPhone = await db.one('employees', `phone_key=eq.${q(key)}&select=id`);
+    if (dupPhone && dupPhone.id !== id) throw new Fail('duplicate_phone');
+    let code = str(p.code, 40);
+    if (!code) {
+      const all = await db.select('employees', 'select=code');
+      code = String(Math.max(1000, ...all.map((x) => Number(x.code) || 0)) + 1);
+    }
     const dup = await db.one('employees', `code=eq.${q(code)}&select=id`);
     if (dup && dup.id !== id) throw new Fail('duplicate_code');
-    const branchId = str(p.branch_id, 64);
-    if (branchId && !(await db.one('branches', `id=eq.${q(branchId)}&select=id`))) throw new Fail('missing_fields');
     const row = {
-      code, name, phone: str(p.phone, 30), job_title: str(p.job_title), department: str(p.department),
-      branch_id: branchId,
+      code, name, phone, phone_key: key, job_title: str(p.job_title), department: str(p.department),
       shift_start: validHm(p.shift_start) ? p.shift_start.slice(0, 5) : '08:00',
       shift_end: validHm(p.shift_end) ? p.shift_end.slice(0, 5) : '16:00',
       active: p.active === false || p.active === 'false' ? 0 : 1,
@@ -295,41 +356,18 @@ const actions = {
       if (!saved) throw new Fail('not_found', 404);
       if (pin !== null || !row.active) await db.remove('sessions', `employee_id=eq.${q(id)}`);
     }
-    return empOut(saved, await db.select('branches', 'select=id,name'));
+    return empOut(saved);
   },
 
   async admin_delete_employee(db, a) {
     await requireAdmin(db, a.p_token);
     const id = str(a.p_id, 64);
     if (!id) throw new Fail('missing_fields');
+    const recs = await db.select('attendance', `employee_id=eq.${q(id)}&select=in_photo,out_photo`);
+    await db.removeFiles('selfies', recs.flatMap((r) => [r.in_photo, r.out_photo]).filter(Boolean));
     await db.remove('sessions', `employee_id=eq.${q(id)}`);
     await db.remove('attendance', `employee_id=eq.${q(id)}`);
     await db.remove('employees', `id=eq.${q(id)}`);
-    return { ok: true };
-  },
-
-  async admin_save_branch(db, a) {
-    await requireAdmin(db, a.p_token);
-    const p = a.p || {};
-    const id = str(p.id, 64), name = str(p.name);
-    if (!name) throw new Fail('missing_fields');
-    const lat = num(p.lat), lng = num(p.lng);
-    if ((lat === null) !== (lng === null)) throw new Fail('bad_location');
-    if (lat !== null && (!isFinite(lat) || !isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180)) throw new Fail('bad_location');
-    const radius = Math.min(2000, Math.max(20, Math.round(num(p.radius_m) || 150)));
-    const row = { name, lat, lng, radius_m: radius };
-    if (!id) return branchOut(await db.insert('branches', { id: uuid(), created_at: nowIso(), ...row }));
-    const [saved] = await db.update('branches', `id=eq.${q(id)}`, row);
-    if (!saved) throw new Fail('not_found', 404);
-    return branchOut(saved);
-  },
-
-  async admin_delete_branch(db, a) {
-    await requireAdmin(db, a.p_token);
-    const id = str(a.p_id, 64);
-    if (!id) throw new Fail('missing_fields');
-    await db.update('employees', `branch_id=eq.${q(id)}`, { branch_id: null });
-    await db.remove('branches', `id=eq.${q(id)}`);
     return { ok: true };
   },
 
@@ -338,21 +376,20 @@ const actions = {
     if (!validDate(a.p_from) || !validDate(a.p_to)) throw new Fail('missing_fields');
     let query = `work_date=gte.${a.p_from}&work_date=lte.${a.p_to}&select=*&order=work_date.desc,check_in.asc`;
     if (a.p_employee) query += `&employee_id=eq.${q(String(a.p_employee))}`;
-    const [att, emps] = await Promise.all([db.select('attendance', query), db.select('employees', 'select=id,code,name,department')]);
-    return att.map((r) => {
+    const [att, emps] = await Promise.all([db.select('attendance', query), db.select('employees', 'select=id,code,name,phone,department')]);
+    return Promise.all(att.map(async (r) => {
       const e = emps.find((x) => x.id === r.employee_id) || {};
-      return {
-        id: r.id, work_date: r.work_date, check_in: r.check_in, check_out: r.check_out, status: r.status,
-        in_distance: r.in_distance, out_distance: r.out_distance,
-        employee_id: r.employee_id, code: e.code, name: e.name || '—', department: e.department,
-      };
-    });
+      return { ...(await recordOut(db, r, !!a.p_photos)), id: r.id, work_date: r.work_date, status: r.status,
+        employee_id: r.employee_id, code: e.code, name: e.name || '—', phone: e.phone, department: e.department };
+    }));
   },
 
   async admin_delete_attendance(db, a) {
     await requireAdmin(db, a.p_token);
     const id = str(a.p_id, 64);
     if (!id) throw new Fail('missing_fields');
+    const r = await db.one('attendance', `id=eq.${q(id)}&select=in_photo,out_photo`);
+    if (r) await db.removeFiles('selfies', [r.in_photo, r.out_photo].filter(Boolean));
     await db.remove('attendance', `id=eq.${q(id)}`);
     return { ok: true };
   },
@@ -376,6 +413,7 @@ const actions = {
       patch.admin_pass_hash = await hashSecret(String(p.new_password));
     }
     if (Object.keys(patch).length) await db.update('settings', 'id=eq.1', patch);
+    settingsCache = null;
     if (patch.admin_pass_hash) await db.remove('sessions', `kind=eq.admin&token_hash=neq.${s.token_hash}`);
     return { ok: true };
   },

@@ -13,9 +13,11 @@
     too_many_attempts: 'محاولات كثيرة، حاول مرة أخرى بعد قليل',
     unauthorized: 'انتهت الجلسة، الرجاء تسجيل الدخول مجدداً',
     location_required: 'شغّل خدمة الموقع واسمح للمتصفح بالوصول إليها لتسجيل البصمة',
-    weak_location: 'دقة الموقع ضعيفة، اخرج إلى مكان مفتوح أو فعّل GPS وحاول مجدداً',
-    no_workplace: 'لم يحدد المسؤول موقع مقر عملك بعد، تواصل معه',
-    bad_location: 'الإحداثيات غير صحيحة',
+    photo_required: 'يجب التقاط صورة سيلفي واضحة لتسجيل البصمة',
+    photo_upload_failed: 'تعذّر حفظ الصورة، حاول مرة أخرى',
+    camera_denied: 'اسمح للتطبيق باستخدام الكاميرا من إعدادات المتصفح',
+    bad_phone: 'رقم الجوال غير صحيح',
+    duplicate_phone: 'رقم الجوال مسجّل لموظف آخر',
     not_found: 'العنصر غير موجود',
     conflict: 'تعارض في البيانات، حدّث الصفحة وحاول مجدداً',
     already_checked_in: 'تم تسجيل حضورك مسبقاً اليوم',
@@ -215,6 +217,7 @@
     download: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 10l5 5 5-5M4 21h16"/></svg>',
     trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13"/></svg>',
     clock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
+    camera: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13.5" r="3.5"/></svg>',
     search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>',
   };
 
