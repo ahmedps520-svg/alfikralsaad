@@ -6,7 +6,9 @@
     url: 'https://api.forgebase.art/p/eavvmysvbnldzaevrtki',
     key: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJmb3JnZWJhc2UiLCJyZWYiOiJlYXZ2bXlzdmJubGR6YWV2cnRraSIsInJvbGUiOiJhbm9uIiwia2lkIjoiNzM2NzI0ZGMtYzE2My00NTUxLWJhMjItZDYyNTVmNjE2OTAwIiwiaWF0IjoxNzk1MzY1MjkzfQ.cIKnLN2Ssm5Mdbb4FETwph0ti1F4n1D2Ly_Epcg5a1M',
   };
-  const LOCALE = 'ar-u-nu-latn';
+  // Formatting locale follows the chosen language (see i18n.js).
+  const I = window.FikrI18n || { lang: 'ar', locale: 'ar-u-nu-latn', T: (x) => x };
+  const L = () => I.locale;
 
   const ERRORS = {
     invalid_login: 'بيانات الدخول غير صحيحة',
@@ -37,8 +39,6 @@
 
   function errorText(err) {
     const code = (err && (err.code || err.message)) || 'network';
-    const m = /^outside_area:(\d+)/.exec(code);
-    if (m) return `أنت خارج نطاق مقر العمل (تبعد ${Number(m[1]).toLocaleString(LOCALE)} م)`;
     return ERRORS[code] || 'حدث خطأ غير متوقع، حاول مرة أخرى';
   }
 
@@ -69,17 +69,18 @@
   /* ── formatting ── */
   function fmtTime(iso, tz) {
     if (!iso) return '—';
-    return new Date(iso).toLocaleTimeString(LOCALE, { hour: 'numeric', minute: '2-digit', timeZone: tz });
+    return new Date(iso).toLocaleTimeString(L(), { hour: 'numeric', minute: '2-digit', timeZone: tz });
   }
   function fmtDate(d, opts) {
     const date = typeof d === 'string' && d.length === 10 ? new Date(d + 'T12:00:00Z') : new Date(d);
     const o = Object.assign({ weekday: 'long', day: 'numeric', month: 'long' }, opts || {});
     if (typeof d === 'string' && d.length === 10) o.timeZone = 'UTC';
-    return date.toLocaleDateString(LOCALE, o);
+    return date.toLocaleDateString(L(), o);
   }
   function fmtHijri(tz) {
     try {
-      return new Date().toLocaleDateString('ar-SA-u-ca-islamic-umalqura-nu-latn', { day: 'numeric', month: 'long', year: 'numeric', timeZone: tz });
+      const loc = I.lang === 'en' ? 'en-u-ca-islamic-umalqura' : 'ar-SA-u-ca-islamic-umalqura-nu-latn';
+      return new Date().toLocaleDateString(loc, { day: 'numeric', month: 'long', year: 'numeric', timeZone: tz });
     } catch (e) { return ''; }
   }
   function fmtDuration(ms) {
@@ -87,6 +88,7 @@
     const m = Math.floor(ms / 60000);
     const h = Math.floor(m / 60);
     const mm = m % 60;
+    if (I.lang === 'en') return h === 0 ? `${mm}m` : `${h}h${mm ? ' ' + mm + 'm' : ''}`;
     if (h === 0) return `${mm} د`;
     return `${h} س ${mm ? mm + ' د' : ''}`.trim();
   }
@@ -186,7 +188,7 @@
     const step = (now) => {
       const p = Math.min(1, (now - start) / d);
       const e = 1 - Math.pow(1 - p, 3);
-      el.textContent = Math.round(from + (to - from) * e).toLocaleString(LOCALE);
+      el.textContent = Math.round(from + (to - from) * e).toLocaleString(L());
       if (p < 1) requestAnimationFrame(step);
     };
     requestAnimationFrame(step);
@@ -222,7 +224,8 @@
   };
 
   window.Fikr = {
-    CONFIG, LOCALE, rpc, errorText, store, fmtTime, fmtDate, fmtHijri, fmtDuration, fmtClock, todayISO, addDays,
+    get LOCALE() { return L(); }, get lang() { return I.lang; }, T: I.T, langSwitch: (x) => (I.switchHtml ? I.switchHtml(x) : ''),
+    CONFIG, rpc, errorText, store, fmtTime, fmtDate, fmtHijri, fmtDuration, fmtClock, todayISO, addDays,
     initials, esc, statusPill, STATUS, toast, sheet, confirmSheet, busy, countUp, vibrate, distanceM, ICONS,
   };
 })();

@@ -24,6 +24,10 @@ A simple, Arabic-first, phone-first attendance app. Employees confirm they arriv
 - Records: filter by date range and employee, view the selfies, and export to Excel (CSV) with sites and coordinates.
 - Settings: company name, time zone, late grace minutes, and the admin password.
 
+## Languages
+
+Arabic is the default. A clear **عربي | EN** switch sits on both sign-in screens, in the header of every screen, in the employee's Account page and in the admin Settings. The choice is remembered on each device. English switches the whole layout to left-to-right and formats dates, times and numbers in English. Names, sites and other data people type stay as they are. Translations live in `assets/i18n.js`.
+
 ## How it works
 
 The site is plain static HTML, CSS and JS, with no build step. GitHub Pages serves it from the `gh-pages` branch, which `.github/workflows/pages.yml` keeps mirrored from `main`.

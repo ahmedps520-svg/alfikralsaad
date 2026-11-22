@@ -189,7 +189,7 @@
             <h1>${F.esc(e.name)}</h1>
           </div>
         </div>
-        <button class="icon-btn" id="refreshBtn" aria-label="تحديث">${F.ICONS.refresh}</button>
+        <div class="row" style="gap:8px">${F.langSwitch('glass')}<button class="icon-btn" id="refreshBtn" aria-label="تحديث">${F.ICONS.refresh}</button></div>
       </div>
     </header>
     <div class="page">
@@ -441,7 +441,7 @@
     }).join('');
     return `
     <header class="hero"><div class="hero-top"><div><p class="sub">آخر 30 يوماً</p><h1>سجل الحضور</h1></div>
-      <button class="icon-btn" id="refreshBtn" aria-label="تحديث">${F.ICONS.refresh}</button></div></header>
+      <div class="row" style="gap:8px">${F.langSwitch('glass')}<button class="icon-btn" id="refreshBtn" aria-label="تحديث">${F.ICONS.refresh}</button></div></div></header>
     <div class="page">
       <div class="card lift"><div class="stats3">
         <div><div class="k">أيام الحضور</div><div class="v">${hist.length.toLocaleString(F.LOCALE)}</div></div>
@@ -472,6 +472,9 @@
         ${kv('مهلة التأخير', `${me.grace_minutes} دقيقة`)}
       </div>
       <div class="card">
+        <div class="row between"><div><div class="bold">اللغة</div><div class="muted small">اختر لغة التطبيق</div></div>${F.langSwitch('lg')}</div>
+      </div>
+      <div class="card">
         <div class="row"><div style="flex:1"><div class="bold">أضف التطبيق للشاشة الرئيسية</div>
         <div class="muted small">من قائمة المتصفح اختر «إضافة إلى الشاشة الرئيسية» للوصول السريع</div></div><img src="assets/logo.svg" width="40" height="40" alt=""></div>
       </div>
@@ -479,6 +482,9 @@
       <p class="center tiny muted" style="margin-top:18px">الفكر السعد · نظام الحضور والانصراف</p>
     </div>`;
   }
+
+  // Re-draw the current screen in the newly chosen language.
+  window.addEventListener('fikr:lang', () => { if (state.me && !$('#app').classList.contains('hidden')) render(); });
 
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible' && state.token && state.me) refresh();

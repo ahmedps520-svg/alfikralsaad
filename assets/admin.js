@@ -71,7 +71,7 @@
   const view = (html) => { $('#view').innerHTML = html; };
   const hero = (title, sub, extra) => `
     <header class="hero compact"><div class="hero-top"><div><p class="sub">${sub}</p><h1>${title}</h1></div>
-      <button class="icon-btn" id="refreshBtn" aria-label="تحديث">${F.ICONS.refresh}</button></div>${extra || ''}</header>`;
+      <div class="row" style="gap:8px">${F.langSwitch('glass')}<button class="icon-btn" id="refreshBtn" aria-label="تحديث">${F.ICONS.refresh}</button></div></div>${extra || ''}</header>`;
   function bindRefresh(fn) {
     const b = $('#refreshBtn');
     if (b) b.onclick = () => { b.firstElementChild.style.animation = 'spin .8s linear infinite'; fn(true); };
@@ -154,7 +154,7 @@
         ${avatar(r)}
         <div class="meta"><div class="t">${F.esc(r.name)}</div>
           <div class="s">${r.in_site ? '📍 ' + F.esc(r.in_site) : F.esc(r.department || r.phone || '')}</div></div>
-        <div class="times">${r.check_in ? `دخول <b class="num">${F.fmtTime(r.check_in, tz)}</b><br>خروج <b class="num">${F.fmtTime(r.check_out, tz)}</b>` : `<span class="num">${r.shift_start}</span>`}</div>
+        <div class="times">${r.check_in ? `حضور <b class="num">${F.fmtTime(r.check_in, tz)}</b><br>انصراف <b class="num">${F.fmtTime(r.check_out, tz)}</b>` : `<span class="num">${r.shift_start}</span>`}</div>
         ${pill}
       </div>`;
     }).join('');
@@ -162,9 +162,9 @@
     const dateLabel = F.fmtDate(state.date, { year: 'numeric' });
     view(hero('لوحة اليوم', F.esc(o.company), `
       <div class="date-nav">
-        <button class="icon-btn" id="prevDay" aria-label="اليوم السابق"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="m9 6 6 6-6 6"/></svg></button>
+        <button class="icon-btn" id="prevDay" aria-label="اليوم السابق"><svg class="flip-ltr" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="m9 6 6 6-6 6"/></svg></button>
         <input class="input" type="date" id="dateInp" value="${state.date}" max="${o.today}" aria-label="${dateLabel}">
-        <button class="icon-btn" id="nextDay" aria-label="اليوم التالي" ${isToday ? 'disabled style="opacity:.4"' : ''}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="m15 6-6 6 6 6"/></svg></button>
+        <button class="icon-btn" id="nextDay" aria-label="اليوم التالي" ${isToday ? 'disabled style="opacity:.4"' : ''}><svg class="flip-ltr" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="m15 6-6 6 6 6"/></svg></button>
       </div>`) + `
     <div class="page">
       <div class="card lift">
@@ -357,8 +357,11 @@
               <div class="kv"><span class="k">الرمز السري</span><span class="v num">${F.esc(p.pin)}</span></div></div>
               <div class="grid-2" style="margin-top:14px"><button class="btn ghost" id="shareBtn">مشاركة</button><button class="btn" data-close>تم</button></div>`, (el2) => {
               $('#shareBtn', el2).onclick = () => {
-                const text = `مرحباً ${p.name}\nرابط تسجيل الحضور: ${location.href.replace(/admin\.html.*$/, '')}\nرقم الجوال: ${p.phone}\nالرمز السري: ${p.pin}`;
-                if (navigator.share) navigator.share({ title: 'الفكر السعد', text }).catch(() => {});
+                const link = location.href.replace(/admin\.html.*$/, '');
+                const text = F.lang === 'en'
+                  ? `Hello ${p.name}\nAttendance link: ${link}\nMobile number: ${p.phone}\nPIN: ${p.pin}`
+                  : `مرحباً ${p.name}\nرابط تسجيل الحضور: ${link}\nرقم الجوال: ${p.phone}\nالرمز السري: ${p.pin}`;
+                if (navigator.share) navigator.share({ title: F.T('الفكر السعد'), text }).catch(() => {});
                 else { window.open('https://wa.me/?text=' + encodeURIComponent(text), '_blank'); }
               };
             });
@@ -446,13 +449,13 @@
   function exportCsv() {
     const tz = state.tz;
     const t = (iso) => (iso ? new Date(iso).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: tz }) : '');
-    const rows = [['التاريخ', 'الاسم', 'الجوال', 'القسم', 'الحضور', 'موقع الحضور', 'إحداثيات الحضور', 'الانصراف', 'موقع الانصراف', 'إحداثيات الانصراف', 'الساعات', 'الحالة']];
+    const rows = [['التاريخ', 'الاسم', 'الجوال', 'القسم', 'الحضور', 'موقع الحضور', 'إحداثيات الحضور', 'الانصراف', 'موقع الانصراف', 'إحداثيات الانصراف', 'الساعات', 'الحالة'].map(F.T)];
     const ll = (lat, lng) => (lat != null ? `${lat},${lng}` : '');
     state.records.slice().reverse().forEach((r) => rows.push([
       r.work_date, r.name, r.phone || '', r.department || '', t(r.check_in), r.in_site || '', ll(r.in_lat, r.in_lng),
       t(r.check_out), r.out_site || '', ll(r.out_lat, r.out_lng),
       r.check_in && r.check_out ? ((new Date(r.check_out) - new Date(r.check_in)) / 36e5).toFixed(2) : '',
-      (F.STATUS[r.status] || {}).label || r.status,
+      F.T((F.STATUS[r.status] || {}).label || r.status),
     ]));
     const csv = '﻿' + rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\r\n');
     const a = document.createElement('a');
@@ -482,6 +485,9 @@
           <button class="btn block" id="setSave" type="submit">حفظ الإعدادات</button>
         </form>
         <div class="card">
+          <div class="row between"><div><h3 style="margin:0">اللغة</h3><div class="muted small">اختر لغة التطبيق</div></div>${F.langSwitch('lg')}</div>
+        </div>
+        <div class="card">
           <h3>رابط الموظفين</h3>
           <p class="muted small" style="margin-top:-4px">شارك هذا الرابط مع موظفيك لتسجيل الحضور من جوالاتهم</p>
           <div class="row"><input class="input ltr small" readonly value="${F.esc(empUrl)}" id="empUrl"><button class="btn sm" id="copyUrl">نسخ</button></div>
@@ -507,6 +513,14 @@
       } catch (e) { fail(e); } finally { F.busy(btn, false); }
     };
   }
+
+  // Re-draw the current screen in the newly chosen language (from data already loaded).
+  window.addEventListener('fikr:lang', () => {
+    if (!state.token || $('#app').classList.contains('hidden')) return;
+    const r = { today: state.overview && (() => renderToday(true)), employees: state.list && renderEmployees,
+      records: state.records && renderRecords, settings: state.list && renderSettings }[state.tab];
+    if (r) r(); else go(state.tab);
+  });
 
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden && state.token && state.tab === 'today' && state.overview) loadToday(true);
