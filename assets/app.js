@@ -88,7 +88,7 @@
     if (watchId != null) return;
     watchId = navigator.geolocation.watchPosition(
       (p) => { state.pos = { lat: p.coords.latitude, lng: p.coords.longitude, acc: p.coords.accuracy }; state.geo = 'ok'; updateLoc(); },
-      (err) => { state.geo = err.code === 1 ? 'denied' : 'error'; updateLoc(); },
+      (err) => { state.geo = err.code === 1 ? 'denied' : 'error'; if (err.code === 1) state.pos = null; updateLoc(); },
       { enableHighAccuracy: true, maximumAge: 15000, timeout: 25000 }
     );
   }
@@ -97,7 +97,7 @@
       if (!('geolocation' in navigator)) return resolve(state.pos);
       navigator.geolocation.getCurrentPosition(
         (p) => { state.pos = { lat: p.coords.latitude, lng: p.coords.longitude, acc: p.coords.accuracy }; state.geo = 'ok'; resolve(state.pos); },
-        (err) => { if (err.code === 1) state.geo = 'denied'; resolve(state.pos); },
+        (err) => { state.geo = err.code === 1 ? 'denied' : 'error'; if (err.code === 1) state.pos = null; resolve(state.pos); },
         { enableHighAccuracy: true, maximumAge: 5000, timeout: 12000 }
       );
     });
@@ -106,16 +106,25 @@
     const b = state.me && state.me.branch;
     return b && b.lat != null && b.lng != null ? b : null;
   }
+  // Check-in/out is only possible with location ON and inside the workplace radius.
+  // The server enforces the same rule; this only explains it to the employee up front.
+  const MAX_ACCURACY_M = 150, ACCURACY_ALLOWANCE_M = 25;
   function locInfo() {
     const b = geofence();
-    if (!b) return { cls: '', text: state.me && state.me.branch ? 'التحقق بالموقع غير مفعّل لفرعك' : 'لم يتم تحديد فرع لك' };
-    if (state.geo === 'denied') return { cls: 'bad', text: 'اسمح بالوصول إلى موقعك من إعدادات المتصفح' };
-    if (state.geo === 'unsupported') return { cls: 'bad', text: 'جهازك لا يدعم تحديد الموقع' };
-    if (!state.pos) return { cls: 'warn', text: 'جارٍ تحديد موقعك…' };
+    if (!b) return { ok: false, cls: 'bad', text: 'لم يحدد المسؤول موقع مقر عملك بعد' };
+    if (state.geo === 'unsupported') return { ok: false, cls: 'bad', text: 'جهازك لا يدعم تحديد الموقع' };
+    if (state.geo === 'denied') return { ok: false, cls: 'bad', text: 'الموقع مغلق · فعّله واسمح للمتصفح بالوصول' };
+    if (!state.pos) {
+      return state.geo === 'error'
+        ? { ok: false, cls: 'bad', text: 'تعذّر تحديد موقعك · تأكد أن خدمة الموقع مفعّلة' }
+        : { ok: false, cls: 'warn', text: 'جارٍ تحديد موقعك…' };
+    }
+    const acc = state.pos.acc || 0;
+    if (acc > MAX_ACCURACY_M) return { ok: false, cls: 'warn', text: `دقة الموقع ضعيفة (±${Math.round(acc).toLocaleString(F.LOCALE)} م) · فعّل GPS` };
     const d = Math.round(F.distanceM(state.pos.lat, state.pos.lng, b.lat, b.lng));
     const dTxt = d >= 1000 ? `${(d / 1000).toLocaleString(F.LOCALE, { maximumFractionDigits: 1 })} كم` : `${d.toLocaleString(F.LOCALE)} م`;
-    if (d <= b.radius_m + Math.min(state.pos.acc || 0, 50)) return { cls: 'ok', text: `داخل نطاق ${b.name} · ${dTxt}` };
-    return { cls: 'bad', text: `خارج نطاق العمل · تبعد ${dTxt}` };
+    if (d <= b.radius_m + Math.min(acc, ACCURACY_ALLOWANCE_M)) return { ok: true, cls: 'ok', text: `داخل ${b.name} · ${dTxt}` };
+    return { ok: false, cls: 'bad', text: `خارج مقر العمل · تبعد ${dTxt}` };
   }
   function updateLoc() {
     const el = $('#loc');
@@ -123,6 +132,14 @@
     const i = locInfo();
     el.className = 'loc ' + i.cls;
     el.innerHTML = `<span class="dot"></span>${F.esc(i.text)}`;
+    const btn = $('#punchBtn');
+    if (!btn || btn.classList.contains('loading') || btn.classList.contains('success')) return;
+    const ps = punchState();
+    if (ps === 'done') return;
+    btn.classList.toggle('locked', !i.ok);
+    $('.hint', btn).textContent = i.ok
+      ? (ps === 'in' ? 'اضغط لتسجيل البصمة' : 'اضغط عند المغادرة')
+      : 'متاح فقط داخل مقر العمل';
   }
 
   /* ───────── render ───────── */
@@ -279,13 +296,14 @@
     F.vibrate(15);
     btn.classList.add('loading');
     $('.lbl', btn).textContent = 'جارٍ التحقق…';
-    $('.hint', btn).textContent = geofence() ? 'نتحقق من موقعك' : 'لحظات';
+    $('.hint', btn).textContent = 'نتحقق من موقعك';
     try {
-      const pos = geofence() ? await freshPosition() : state.pos;
-      if (geofence() && !pos) throw { code: 'location_required' };
+      if (!geofence()) throw { code: 'no_workplace' };
+      const pos = await freshPosition();
+      const info = locInfo();
+      if (!pos || !info.ok) throw { local: info.text };
       const r = await F.rpc('alfikr_emp_punch', {
-        p_token: state.token, p_type: ps,
-        p_lat: pos ? pos.lat : null, p_lng: pos ? pos.lng : null, p_accuracy: pos ? pos.acc : null,
+        p_token: state.token, p_type: ps, p_lat: pos.lat, p_lng: pos.lng, p_accuracy: pos.acc,
       });
       btn.classList.remove('loading');
       btn.classList.add('success');
@@ -303,7 +321,7 @@
       btn.classList.remove('shake'); void btn.offsetWidth; btn.classList.add('shake');
       F.vibrate([40, 50, 40]);
       if (e.code === 'unauthorized') return logout(true);
-      F.toast(F.errorText(e), 'bad');
+      F.toast(e.local || F.errorText(e), 'bad');
       updateLoc();
       if (/^already_/.test(e.code || '')) refresh();
     }

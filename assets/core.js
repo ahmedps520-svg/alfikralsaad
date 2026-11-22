@@ -1,8 +1,10 @@
 /* الفكر السعد — shared helpers: API, formatting, UI primitives */
 (function () {
+  // ForgeBase project (https://forgebase.art). The anon key is browser-safe: every table is
+  // locked by row-level security and all reads/writes go through the `api` edge function.
   const CONFIG = {
-    url: 'https://ffwjxvrporoittxrllru.supabase.co',
-    key: 'sb_publishable_L3INZ93lx6-JQNPfFh55wA_NoeJ1XJr',
+    url: 'https://api.forgebase.art/p/eavvmysvbnldzaevrtki',
+    key: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJmb3JnZWJhc2UiLCJyZWYiOiJlYXZ2bXlzdmJubGR6YWV2cnRraSIsInJvbGUiOiJhbm9uIiwia2lkIjoiNzM2NzI0ZGMtYzE2My00NTUxLWJhMjItZDYyNTVmNjE2OTAwIiwiaWF0IjoxNzk1MzY1MjkzfQ.cIKnLN2Ssm5Mdbb4FETwph0ti1F4n1D2Ly_Epcg5a1M',
   };
   const LOCALE = 'ar-u-nu-latn';
 
@@ -10,7 +12,12 @@
     invalid_login: 'بيانات الدخول غير صحيحة',
     too_many_attempts: 'محاولات كثيرة، حاول مرة أخرى بعد قليل',
     unauthorized: 'انتهت الجلسة، الرجاء تسجيل الدخول مجدداً',
-    location_required: 'يجب السماح بالوصول إلى موقعك لتسجيل البصمة',
+    location_required: 'شغّل خدمة الموقع واسمح للمتصفح بالوصول إليها لتسجيل البصمة',
+    weak_location: 'دقة الموقع ضعيفة، اخرج إلى مكان مفتوح أو فعّل GPS وحاول مجدداً',
+    no_workplace: 'لم يحدد المسؤول موقع مقر عملك بعد، تواصل معه',
+    bad_location: 'الإحداثيات غير صحيحة',
+    not_found: 'العنصر غير موجود',
+    conflict: 'تعارض في البيانات، حدّث الصفحة وحاول مجدداً',
     already_checked_in: 'تم تسجيل حضورك مسبقاً اليوم',
     already_checked_out: 'تم تسجيل انصرافك مسبقاً اليوم',
     not_checked_in: 'يجب تسجيل الحضور أولاً',
@@ -36,10 +43,10 @@
   async function rpc(fn, args) {
     let res;
     try {
-      res = await fetch(`${CONFIG.url}/rest/v1/rpc/${fn}`, {
+      res = await fetch(`${CONFIG.url}/functions/v1/api`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', apikey: CONFIG.key },
-        body: JSON.stringify(args || {}),
+        headers: { 'Content-Type': 'application/json', apikey: CONFIG.key, Authorization: `Bearer ${CONFIG.key}` },
+        body: JSON.stringify(Object.assign({ action: fn.replace(/^alfikr_/, '') }, args || {})),
       });
     } catch (e) {
       throw new ApiError('network');

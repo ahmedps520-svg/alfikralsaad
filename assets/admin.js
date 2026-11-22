@@ -291,7 +291,7 @@
     const e = emp || { active: true, shift_start: '08:00', shift_end: '16:00' };
     const branches = state.list.branches;
     const nextCode = String(1000 + state.list.employees.length + 1);
-    const opts = '<option value="">بدون فرع</option>' + branches.map((b) => `<option value="${b.id}" ${b.id === e.branch_id ? 'selected' : ''}>${F.esc(b.name)}</option>`).join('');
+    const opts = '<option value="">بدون فرع (لن يستطيع التسجيل)</option>' + branches.map((b) => `<option value="${b.id}" ${b.id === e.branch_id ? 'selected' : ''}>${F.esc(b.name)}</option>`).join('');
     F.sheet(`<h3>${emp ? 'تعديل بيانات الموظف' : 'إضافة موظف جديد'}</h3>
       <form id="empForm">
         <label class="field"><span>الاسم الكامل *</span><input class="input" name="name" value="${F.esc(e.name || '')}" required></label>
@@ -304,7 +304,8 @@
           <label class="field"><span>القسم</span><input class="input" name="department" value="${F.esc(e.department || '')}"></label>
         </div>
         <label class="field"><span>رقم الجوال</span><input class="input ltr" name="phone" type="tel" inputmode="tel" value="${F.esc(e.phone || '')}" placeholder="05xxxxxxxx"></label>
-        <label class="field"><span>الفرع</span><select class="input" name="branch_id">${opts}</select></label>
+        <label class="field"><span>الفرع (مقر العمل)</span><select class="input" name="branch_id">${opts}</select>
+          <small class="tiny muted" style="display:block;margin-top:6px">يسجّل الموظف حضوره فقط من داخل موقع فرعه</small></label>
         <div class="form-row">
           <label class="field"><span>بداية الدوام</span><input class="input" type="time" name="shift_start" value="${e.shift_start}"></label>
           <label class="field"><span>نهاية الدوام</span><input class="input" type="time" name="shift_end" value="${e.shift_end}"></label>
@@ -452,10 +453,10 @@
       <div class="row between"><div class="row"><div class="avatar" style="background:color-mix(in srgb,var(--gold) 16%,transparent);color:var(--gold);border:0">${F.ICONS.pin.replace('<svg', '<svg width="22" height="22"')}</div>
       <div><div class="bold">${F.esc(b.name)}</div><div class="tiny muted">${b.employees} موظف</div></div></div>
       ${b.lat != null ? `<span class="pill ok">نطاق ${b.radius_m} م</span>` : '<span class="pill warn">بدون موقع</span>'}</div>
-      ${b.lat != null ? `<div class="tiny muted num" style="margin-top:10px">${b.lat.toFixed(5)}, ${b.lng.toFixed(5)}</div>` : '<div class="tiny muted" style="margin-top:10px">حدد موقع الفرع لتفعيل التحقق من الموقع عند البصمة</div>'}
+      ${b.lat != null ? `<div class="tiny muted num" style="margin-top:10px">${b.lat.toFixed(5)}, ${b.lng.toFixed(5)}</div>` : '<div class="tiny" style="margin-top:10px;color:var(--bad)">موظفو هذا الفرع لا يستطيعون التسجيل حتى تحدد موقعه</div>'}
     </div>`).join('');
     view(hero('الفروع', 'مواقع العمل ونطاق البصمة') + `<div class="page"><div class="lift" style="position:relative">
-      ${bs.length ? cards : `<div class="card empty"><div class="ico">📍</div><div class="bold" style="color:var(--ink)">لا توجد فروع</div><p class="small">أضف فرعاً وحدد موقعه ليتحقق النظام أن الموظف داخل مقر العمل</p><button class="btn" id="addB">${F.ICONS.plus} إضافة فرع</button></div>`}
+      ${bs.length ? cards : `<div class="card empty"><div class="ico">📍</div><div class="bold" style="color:var(--ink)">لا توجد فروع</div><p class="small">أضف فرعاً وحدد موقعه، فلا يستطيع الموظف تسجيل البصمة إلا داخل مقر العمل</p><button class="btn" id="addB">${F.ICONS.plus} إضافة فرع</button></div>`}
       </div></div>`);
     bindRefresh(() => loadBranches(true));
     document.querySelectorAll('.branch-card').forEach((c) => c.onclick = () => branchForm(bs.find((b) => b.id === c.dataset.id)));
@@ -474,7 +475,7 @@
         </div>
         <label class="field"><span>نطاق البصمة: <b id="radV">${b.radius_m}</b> متر</span>
           <input type="range" name="radius_m" min="30" max="1000" step="10" value="${b.radius_m}" style="width:100%;accent-color:var(--brand)"></label>
-        <p class="tiny muted" style="margin-top:-6px">يجب أن يكون الموظف ضمن هذا النطاق من موقع الفرع ليتمكن من تسجيل البصمة. اترك الإحداثيات فارغة لتعطيل التحقق.</p>
+        <p class="tiny muted" style="margin-top:-6px">لا يستطيع الموظف تسجيل الحضور أو الانصراف إلا وموقعه مفعّل وداخل هذا النطاق. بدون تحديد موقع الفرع لن يتمكن موظفوه من التسجيل.</p>
         <a class="small" id="mapLink" target="_blank" rel="noopener" ${b.lat != null ? `href="https://maps.google.com/?q=${b.lat},${b.lng}"` : 'style="display:none"'}>عرض على الخريطة ↗</a>
         <button class="btn block" type="submit" id="brSave" style="margin-top:14px">${br ? 'حفظ' : 'إضافة الفرع'}</button>
         ${br ? `<button class="btn soft-danger block" type="button" id="brDel" style="margin-top:10px">${F.ICONS.trash} حذف الفرع</button>` : ''}

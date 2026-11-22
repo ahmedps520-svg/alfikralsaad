@@ -11,7 +11,7 @@ A simple, Arabic-first, phone-first attendance app. Employees confirm they arriv
 **Employees (phone)**
 - Sign in with an employee number and a numeric PIN.
 - One big button to check in and check out, with a live clock (Gregorian and Hijri dates).
-- Location check: the server only accepts a check-in when the phone is inside the branch radius.
+- **Strict location rule:** check-in and check-out only work when the phone's location is on, accurate (±150 m or better), and inside the workplace radius set by the admin. If the employee has no branch with a location, they can't check in at all. The button stays locked until these conditions are met, and the server enforces the same rule.
 - Work timer, today's shift, the last 7 days at a glance, and a full 30-day history.
 - Can be installed to the home screen (PWA manifest), with light and dark mode.
 
@@ -26,7 +26,13 @@ A simple, Arabic-first, phone-first attendance app. Employees confirm they arriv
 
 The site is plain static HTML, CSS and JS, with no build step. GitHub Pages serves it from the `gh-pages` branch, which `.github/workflows/pages.yml` keeps mirrored from `main`.
 
-Data lives in Supabase in a private `alfikr` schema that the API does not expose. The browser can only call the `public.alfikr_*` functions, which check the session token. PINs and the admin password are stored as bcrypt hashes, and repeated failed logins are rate-limited. See `supabase/schema.sql`.
+The backend is [ForgeBase](https://forgebase.art/docs), project **Alfikr Alsaad** (`eavvmysvbnldzaevrtki`):
+
+- The SQLite tables are defined in `forgebase/schema.sql`. Each one has row-level security on and **no policies**, so the public anon key can't read or write them directly.
+- `forgebase/functions/api/index.js` holds the code for the `api` edge function, which is the only way in. It checks employee PINs and the admin password (stored as PBKDF2 hashes) and session tokens (stored as SHA-256 hashes), rate-limits repeated failed logins, and enforces the workplace location rule.
+- CORS is limited to `https://ahmedps520-svg.github.io`.
+
+To change the backend, edit `forgebase/functions/api/index.js` and redeploy it from the ForgeBase dashboard (Edge Functions → api), or ask Claude to do it with the ForgeBase MCP.
 
 ## Run locally
 
