@@ -72,3 +72,18 @@ CREATE TABLE IF NOT EXISTS login_attempts (
   at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS login_attempts_idx ON login_attempts (ident, at);
+
+-- Safety papers: the employee photographs the pages, the app builds one PDF on the phone,
+-- and it is stored in the PRIVATE storage bucket `documents` (PDF only, no policies).
+CREATE TABLE IF NOT EXISTS documents (
+  id TEXT PRIMARY KEY,
+  employee_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  note TEXT,
+  pages INTEGER NOT NULL DEFAULT 1,
+  size_bytes INTEGER NOT NULL DEFAULT 0,
+  path TEXT NOT NULL,          -- path in the `documents` bucket
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS documents_emp_idx ON documents (employee_id, created_at);
+CREATE INDEX IF NOT EXISTS documents_created_idx ON documents (created_at);

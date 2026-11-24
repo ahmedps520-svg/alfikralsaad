@@ -138,9 +138,11 @@
     const v = $('#view');
     if (state.tab === 'home') v.innerHTML = homeView();
     else if (state.tab === 'history') v.innerHTML = historyView();
+    else if (state.tab === 'docs') v.innerHTML = docsView();
     else v.innerHTML = profileView();
     window.scrollTo({ top: 0 });
     if (state.tab === 'home') mountHome();
+    if (state.tab === 'docs') mountDocs();
     if (state.tab === 'profile') $('#logoutBtn').onclick = () => logout();
     const r = $('#refreshBtn');
     if (r) r.onclick = refresh;
@@ -457,6 +459,126 @@
       <div class="section-title"><span>التفاصيل</span></div>
       ${hist.length ? `<div class="list">${items}</div>` : '<div class="card empty"><div class="ico">🗓️</div>لا توجد سجلات بعد<br><span class="small">ستظهر هنا بصمات الحضور والانصراف</span></div>'}
     </div>`;
+  }
+
+  /* ───────── safety papers (photographed pages → one PDF) ───────── */
+  const DOC_TITLES = ['شهادة سلامة', 'تصريح عمل', 'فحص طبي', 'تقرير حادث', 'تدريب سلامة', 'هوية / إقامة'];
+  const fmtSize = (b) => (b >= 1048576 ? (b / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(b / 1024)) + ' KB');
+
+  function docsView() {
+    const docs = state.docs;
+    const items = (docs || []).map((d, i) => `<a class="item tap doc-item" href="${F.esc(d.url || '#')}" target="_blank" rel="noopener" style="animation-delay:${Math.min(i, 12) * 40}ms">
+      <div class="avatar doc-ico">PDF</div>
+      <div class="meta"><div class="t">${F.esc(d.title)}</div>
+        <div class="s">${F.fmtDate(d.created_at, { year: 'numeric', weekday: undefined })} · <span class="num">${d.pages}</span> ${d.pages === 1 ? 'صفحة' : 'صفحات'} · <span class="num">${fmtSize(d.size_bytes)}</span></div></div>
+      <span class="open-ico">${F.ICONS.doc}</span></a>`).join('');
+    return `
+    <header class="hero"><div class="hero-top"><div><p class="sub">صوّر الأوراق وارفعها PDF</p><h1>أوراق السلامة</h1></div>
+      <div class="row" style="gap:8px">${F.langSwitch('glass')}<button class="icon-btn" id="refreshBtn" aria-label="تحديث">${F.ICONS.refresh}</button></div></div></header>
+    <div class="page">
+      <div class="card lift center">
+        <div class="scan-badge">${F.ICONS.camera}</div>
+        <div class="bold" style="font-size:17px">رفع ورقة جديدة</div>
+        <p class="muted small" style="margin:4px 0 14px">صوّر كل صفحة بالكاميرا، ونحوّلها لك إلى ملف PDF واحد</p>
+        <button class="btn block" id="newDoc">${F.ICONS.camera} تصوير الأوراق</button>
+      </div>
+      <div class="section-title"><span>أوراقي المرفوعة</span>${docs ? `<span class="tiny muted">${docs.length}</span>` : ''}</div>
+      ${!docs ? '<div class="card"><div class="skel" style="height:56px"></div><div class="skel" style="height:56px;margin-top:10px"></div></div>'
+        : docs.length ? `<div class="list">${items}</div>` : '<div class="card empty"><div class="ico">📄</div>لم ترفع أي أوراق بعد</div>'}
+    </div>`;
+  }
+  async function mountDocs(force) {
+    $('#newDoc').onclick = scanSheet;
+    if (state.docs && !force) return;
+    try {
+      state.docs = await F.rpc('alfikr_emp_docs', { p_token: state.token });
+      if (state.tab === 'docs') { $('#view').innerHTML = docsView(); $('#newDoc').onclick = scanSheet; const r = $('#refreshBtn'); if (r) r.onclick = () => mountDocs(true); }
+    } catch (e) { if (e.code === 'unauthorized') return logout(true); F.toast(F.errorText(e), 'bad'); }
+  }
+
+  // Document scanner: rear camera, capture page by page (or pick photos), then build one PDF and upload.
+  function scanSheet() {
+    const pages = [];
+    let stream = null, done = false;
+    const stop = () => { if (stream) stream.getTracks().forEach((t) => t.stop()); stream = null; };
+    F.sheet(`
+      <h3>تصوير الأوراق</h3>
+      <div class="scan-cam"><video id="scanVideo" playsinline autoplay muted></video><div class="scan-frame"></div>
+        <div class="cam-msg" id="scanMsg">جارٍ تشغيل الكاميرا…</div><span class="scan-count" id="scanCount" hidden></span></div>
+      <div class="grid-2" style="margin-top:12px">
+        <button class="btn" id="scanSnap" disabled>${F.ICONS.camera} التقاط صفحة</button>
+        <button class="btn ghost" id="scanPick">${F.ICONS.image} من الصور</button>
+      </div>
+      <input type="file" id="scanFile" accept="image/*" multiple hidden>
+      <div class="thumbs" id="scanThumbs"></div>
+      <label class="field" style="margin-top:14px"><span>اسم المستند *</span>
+        <input class="input" id="docTitle" list="docTitles" maxlength="100" placeholder="مثال: شهادة سلامة">
+        <datalist id="docTitles">${DOC_TITLES.map((t) => `<option value="${t}">`).join('')}</datalist></label>
+      <label class="field"><span>ملاحظة (اختياري)</span><input class="input" id="docNote" maxlength="300"></label>
+      <button class="btn block" id="docUpload" disabled>${F.ICONS.upload} حفظ كـ PDF ورفع</button>
+      <button class="btn ghost block" data-close style="margin-top:10px">إلغاء</button>`,
+    (el, close) => {
+      const video = $('#scanVideo', el), msg = $('#scanMsg', el), thumbs = $('#scanThumbs', el), count = $('#scanCount', el);
+      const upBtn = $('#docUpload', el), title = $('#docTitle', el);
+      const refreshUi = () => {
+        thumbs.innerHTML = pages.map((p, i) => `<div class="thumb"><img src="${p.dataUrl}" alt=""><span class="num">${i + 1}</span><button type="button" data-rm="${i}" aria-label="حذف الصفحة">×</button></div>`).join('');
+        thumbs.querySelectorAll('[data-rm]').forEach((b) => b.onclick = () => { pages.splice(Number(b.dataset.rm), 1); refreshUi(); });
+        count.hidden = !pages.length;
+        count.textContent = pages.length;
+        upBtn.disabled = !pages.length || !title.value.trim();
+      };
+      title.oninput = refreshUi;
+      const add = (p) => { pages.push(p); refreshUi(); F.vibrate(15); thumbs.scrollLeft = F.lang === 'en' ? thumbs.scrollWidth : -thumbs.scrollWidth; };
+      (async () => {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { msg.textContent = 'استخدم «من الصور» لإضافة الصفحات'; return; }
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1440 } }, audio: false });
+          if (done) return stop();
+          video.srcObject = stream;
+          await video.play().catch(() => {});
+          msg.hidden = true;
+          const snap = $('#scanSnap', el);
+          snap.disabled = false;
+          snap.onclick = () => {
+            if (!video.videoWidth) return;
+            el.querySelector('.scan-cam').classList.remove('flash'); void el.offsetWidth; el.querySelector('.scan-cam').classList.add('flash');
+            add(FikrPdf.pageFromSource(video, video.videoWidth, video.videoHeight, 1600));
+          };
+        } catch (err) {
+          msg.textContent = err && err.name === 'NotAllowedError' ? F.errorText({ code: 'camera_denied' }) : 'استخدم «من الصور» لإضافة الصفحات';
+        }
+      })();
+      $('#scanPick', el).onclick = () => $('#scanFile', el).click();
+      $('#scanFile', el).onchange = async (ev) => {
+        for (const f of Array.from(ev.target.files || [])) {
+          try {
+            const img = await loadImage(URL.createObjectURL(f));
+            add(FikrPdf.pageFromSource(img, img.naturalWidth, img.naturalHeight, 1600));
+          } catch (e) {}
+        }
+        ev.target.value = '';
+      };
+      upBtn.onclick = async () => {
+        if (!pages.length || !title.value.trim()) return;
+        F.busy(upBtn, true);
+        try {
+          const blob = FikrPdf.build(pages);
+          if (blob.size > 12 * 1024 * 1024) throw { code: 'pdf_too_large' };
+          const pdf = await FikrPdf.toDataUrl(blob);
+          await F.rpc('alfikr_emp_upload_doc', { p_token: state.token, p_title: title.value.trim(), p_note: $('#docNote', el).value.trim(), p_pages: pages.length, p_pdf: pdf });
+          done = true;
+          close();
+          F.toast('تم رفع الملف بنجاح ✓', 'ok');
+          F.vibrate([20, 60, 40]);
+          state.docs = null;
+          if (state.tab === 'docs') { render(); }
+        } catch (e) {
+          F.busy(upBtn, false);
+          if (e.code === 'unauthorized') { close(); return logout(true); }
+          F.toast(F.errorText(e), 'bad');
+        }
+      };
+    }, () => { done = true; stop(); });
   }
 
   function profileView() {

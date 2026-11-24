@@ -9,6 +9,7 @@
 
 const PBKDF2_ITER = 120000;
 const MAX_PHOTO_BYTES = 600 * 1024;
+const MAX_PDF_BYTES = 12 * 1024 * 1024;
 const enc = new TextEncoder();
 
 class Fail extends Error {
@@ -130,6 +131,23 @@ function decodePhoto(v) {
   const isWebp = bytes.slice(0, 4).toString() === 'RIFF' && bytes.slice(8, 12).toString() === 'WEBP';
   if (!isJpeg && !isWebp) throw new Fail('photo_required');
   return { bytes, type: isWebp ? 'image/webp' : 'image/jpeg', ext: isWebp ? 'webp' : 'jpg' };
+}
+
+// Decodes a PDF the app built from photographed pages (data URL or base64) and checks it is a PDF.
+function decodePdf(v) {
+  if (typeof v !== 'string' || v.length < 200) throw new Fail('pdf_required');
+  const m = /^data:application\/pdf;base64,(.+)$/.exec(v);
+  const bytes = Buffer.from(m ? m[1] : v, 'base64');
+  if (bytes.length > MAX_PDF_BYTES) throw new Fail('pdf_too_large');
+  if (bytes.length < 500 || bytes.slice(0, 5).toString() !== '%PDF-') throw new Fail('pdf_required');
+  return bytes;
+}
+async function docOut(db, d, emp) {
+  return {
+    id: d.id, title: d.title, note: d.note, pages: Number(d.pages), size_bytes: Number(d.size_bytes), created_at: d.created_at,
+    url: await db.signed('documents', d.path),
+    employee_id: d.employee_id, name: emp ? emp.name : undefined, phone: emp ? emp.phone : undefined,
+  };
 }
 
 // PINs are hashed for sign-in AND encrypted (AES-GCM, key in the PIN_KEY secret) so the admin can view them.
@@ -320,6 +338,29 @@ const actions = {
     return { ok: true, type, at, status: row.status, check_in: row.check_in, check_out: row.check_out, worked_minutes: Number(row.worked_minutes || 0) };
   },
 
+  // Safety papers: the app photographs the pages and builds one PDF on the phone; this stores it.
+  async emp_upload_doc(db, a) {
+    const e = await requireEmployee(db, a.p_token);
+    const title = str(a.p_title, 100);
+    if (!title) throw new Fail('missing_fields');
+    const pdf = decodePdf(a.p_pdf);
+    const pages = Math.min(200, Math.max(1, Math.round(Number(a.p_pages) || 1)));
+    const id = uuid(), created_at = nowIso();
+    const path = `${e.id}/${created_at.slice(0, 10)}-${hex(crypto.getRandomValues(new Uint8Array(6)))}.pdf`;
+    await db.upload('documents', path, pdf, 'application/pdf');
+    let row;
+    try {
+      row = await db.insert('documents', { id, employee_id: e.id, title, note: str(a.p_note, 300), pages, size_bytes: pdf.length, path, created_at });
+    } catch (err) { db.removeFiles('documents', [path]); throw err; }
+    return docOut(db, row);
+  },
+
+  async emp_docs(db, a) {
+    const e = await requireEmployee(db, a.p_token);
+    const docs = await db.select('documents', `employee_id=eq.${q(e.id)}&select=*&order=created_at.desc&limit=100`);
+    return Promise.all(docs.map((d) => docOut(db, d)));
+  },
+
   /* ───────── admin actions ───────── */
   async admin_login(db, a) {
     await checkRate(db, 'admin', 8, 15 * 60e3);
@@ -432,6 +473,9 @@ const actions = {
     await db.remove('sessions', `employee_id=eq.${q(id)}`);
     await db.remove('punches', `employee_id=eq.${q(id)}`);
     await db.remove('attendance', `employee_id=eq.${q(id)}`);
+    const docs = await db.select('documents', `employee_id=eq.${q(id)}&select=path`);
+    await db.removeFiles('documents', docs.map((d) => d.path));
+    await db.remove('documents', `employee_id=eq.${q(id)}`);
     await db.remove('employees', `id=eq.${q(id)}`);
     return { ok: true };
   },
@@ -461,6 +505,28 @@ const actions = {
     const [prints, emps] = await Promise.all([db.select('punches', query), db.select('employees', 'select=id,name,phone')]);
     const items = await Promise.all(prints.map((p) => punchOut(db, p, emps.find((e) => e.id === p.employee_id))));
     return { items, next_before: prints.length === limit ? prints[prints.length - 1].at : null };
+  },
+
+  // All uploaded safety papers (newest first). Page with p_before (the last created_at seen).
+  async admin_docs(db, a) {
+    await requireAdmin(db, a.p_token);
+    const limit = Math.min(100, Math.max(1, Math.round(Number(a.p_limit) || 40)));
+    let query = `select=*&order=created_at.desc&limit=${limit}`;
+    if (a.p_employee) query += `&employee_id=eq.${q(String(a.p_employee))}`;
+    if (a.p_before && /^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/.test(a.p_before)) query += `&created_at=lt.${q(a.p_before)}`;
+    const [docs, emps] = await Promise.all([db.select('documents', query), db.select('employees', 'select=id,name,phone')]);
+    const items = await Promise.all(docs.map((d) => docOut(db, d, emps.find((e) => e.id === d.employee_id) || { name: '—' })));
+    return { items, next_before: docs.length === limit ? docs[docs.length - 1].created_at : null };
+  },
+
+  async admin_delete_doc(db, a) {
+    await requireAdmin(db, a.p_token);
+    const id = str(a.p_id, 64);
+    if (!id) throw new Fail('missing_fields');
+    const d = await db.one('documents', `id=eq.${q(id)}&select=path`);
+    if (d) await db.removeFiles('documents', [d.path]);
+    await db.remove('documents', `id=eq.${q(id)}`);
+    return { ok: true };
   },
 
   async admin_delete_attendance(db, a) {

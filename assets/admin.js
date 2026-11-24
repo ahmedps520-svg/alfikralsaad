@@ -66,7 +66,7 @@
     document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === tab));
     document.querySelectorAll('.fab').forEach((f) => f.remove());
     window.scrollTo({ top: 0 });
-    ({ today: loadToday, employees: loadEmployees, records: loadRecords, settings: loadSettings })[tab]();
+    ({ today: loadToday, employees: loadEmployees, records: loadRecords, docs: loadDocs, settings: loadSettings })[tab]();
   }
   const view = (html) => { $('#view').innerHTML = html; };
   const hero = (title, sub, extra) => `
@@ -589,6 +589,68 @@
     } catch (e) { fail(e); } finally { F.busy(btn, false); }
   }
 
+  /* ───────── SAFETY PAPERS (PDFs uploaded by employees) ───────── */
+  const fmtSize = (b) => (b >= 1048576 ? (b / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(b / 1024)) + ' KB');
+  async function loadDocs(force) {
+    try {
+      await ensureList();
+      if (!state.docs || force) view(hero('أوراق السلامة', 'المستندات التي رفعها الموظفون') + skeleton());
+      const res = await call('alfikr_admin_docs', { p_employee: state.docEmp || null, p_limit: 40 });
+      state.docs = { items: res.items, next: res.next_before };
+      if (state.tab === 'docs') renderDocs();
+    } catch (e) { fail(e); }
+  }
+  async function moreDocs(btn) {
+    F.busy(btn, true);
+    try {
+      const res = await call('alfikr_admin_docs', { p_employee: state.docEmp || null, p_limit: 40, p_before: state.docs.next });
+      state.docs.items = state.docs.items.concat(res.items);
+      state.docs.next = res.next_before;
+      const y = window.scrollY; renderDocs(); window.scrollTo({ top: y });
+    } catch (e) { fail(e); F.busy(btn, false); }
+  }
+  function renderDocs() {
+    const items = state.docs.items;
+    const empOpts = '<option value="">كل الموظفين</option>' + state.list.employees.map((e) => `<option value="${e.id}" ${e.id === state.docEmp ? 'selected' : ''}>${F.esc(e.name)}</option>`).join('');
+    const rows = items.map((d, i) => `<div class="item tap" data-doc="${d.id}" style="animation-delay:${Math.min(i % 40, 14) * 25}ms">
+      <div class="avatar doc-ico">PDF</div>
+      <div class="meta"><div class="t">${F.esc(d.title)}</div>
+        <div class="s">${F.esc(d.name || '')} · ${F.fmtDate(d.created_at, { year: 'numeric', weekday: undefined })} · <span class="num">${d.pages}</span> ${d.pages === 1 ? 'صفحة' : 'صفحات'}</div></div>
+      <a class="icon-btn sm" href="${F.esc(d.url || '#')}" target="_blank" rel="noopener" data-open aria-label="فتح الملف">${F.ICONS.doc}</a></div>`).join('');
+    view(hero('أوراق السلامة', 'المستندات التي رفعها الموظفون') + `
+      <div class="page">
+        <div class="card lift">
+          <label class="field" style="margin:0"><span>الموظف</span><select class="input" id="docEmp">${empOpts}</select></label>
+        </div>
+        <div style="margin-top:14px">${items.length ? `<div class="list">${rows}</div>` : '<div class="card empty"><div class="ico">📄</div>لا توجد أوراق مرفوعة</div>'}</div>
+        ${state.docs.next ? '<button class="btn ghost block" id="moreDocs" style="margin-top:14px">تحميل المزيد</button>' : ''}
+      </div>`);
+    bindRefresh(() => loadDocs(true));
+    $('#docEmp').onchange = (ev) => { state.docEmp = ev.target.value; loadDocs(true); };
+    const more = $('#moreDocs'); if (more) more.onclick = () => moreDocs(more);
+    document.querySelectorAll('[data-open]').forEach((a) => a.onclick = (ev) => ev.stopPropagation());
+    document.querySelectorAll('.item[data-doc]').forEach((it) => it.onclick = () => docDetail(items.find((d) => d.id === it.dataset.doc)));
+  }
+  function docDetail(d) {
+    F.sheet(`<div class="row" style="margin-bottom:14px"><div class="avatar doc-ico">PDF</div>
+      <div style="flex:1"><h3 style="margin:0">${F.esc(d.title)}</h3><div class="muted small">${F.esc(d.name || '')} · <span class="num">${F.esc(d.phone || '')}</span></div></div></div>
+      <div class="card" style="box-shadow:none">
+        <div class="kv"><span class="k">تاريخ الرفع</span><span class="v">${F.fmtDate(d.created_at, { year: 'numeric' })} · <span class="num">${F.fmtTime(d.created_at, state.tz)}</span></span></div>
+        <div class="kv"><span class="k">عدد الصفحات</span><span class="v num">${d.pages}</span></div>
+        <div class="kv"><span class="k">حجم الملف</span><span class="v num">${fmtSize(d.size_bytes)}</span></div>
+        ${d.note ? `<div class="kv"><span class="k">ملاحظة</span><span class="v">${F.esc(d.note)}</span></div>` : ''}
+      </div>
+      <a class="btn block" style="margin-top:14px;text-decoration:none" href="${F.esc(d.url || '#')}" target="_blank" rel="noopener">${F.ICONS.doc} فتح الملف PDF</a>
+      <button class="btn soft-danger block" id="docDel" style="margin-top:10px">${F.ICONS.trash} حذف الملف</button>
+      <button class="btn ghost block" data-close style="margin-top:10px">إغلاق</button>`, (el, close) => {
+      $('#docDel', el).onclick = async () => {
+        close();
+        if (!(await F.confirmSheet('حذف الملف', 'سيتم حذف هذا المستند نهائياً.', 'حذف'))) return;
+        try { await call('alfikr_admin_delete_doc', { p_id: d.id }); F.toast('تم حذف الملف', 'ok'); loadDocs(true); } catch (e) { fail(e); }
+      };
+    });
+  }
+
   /* ───────── SETTINGS ───────── */
   async function loadSettings(force) {
     try { await ensureList(force === true); if (state.tab === 'settings') renderSettings(); } catch (e) { fail(e); }
@@ -642,7 +704,7 @@
   window.addEventListener('fikr:lang', () => {
     if (!state.token || $('#app').classList.contains('hidden')) return;
     const r = { today: state.overview && (() => renderToday(true)), employees: state.list && renderEmployees,
-      records: state.prints && renderPrints, settings: state.list && renderSettings }[state.tab];
+      records: state.prints && renderPrints, docs: state.docs && renderDocs, settings: state.list && renderSettings }[state.tab];
     if (r) r(); else go(state.tab);
   });
 

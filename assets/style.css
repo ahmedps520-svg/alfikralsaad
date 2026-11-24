@@ -305,3 +305,8 @@ html[lang=ar] .auth-lang [data-lang=ar], html[lang=en] .auth-lang [data-lang=en]
 .auth-lang button { padding: 9px 16px; font-size: 14px; }
 [dir=ltr] .flip-ltr { transform: scaleX(-1); }
 [lang=en] body { letter-spacing: 0; }
+
+/* PDF badge (employee + admin) */
+.avatar.doc-ico { background: #fee2e2; color: #dc2626; border: 0; font-size: 11px; font-weight: 800; letter-spacing: .04em; border-radius: 12px; }
+@media (prefers-color-scheme: dark) { .avatar.doc-ico { background: #3a1616; } }
+a.item { color: inherit; text-decoration: none; }
