@@ -1,4 +1,4 @@
-/* الفكر السعد — Arabic / English switch.
+/* الفكر الساعد — Arabic / English switch.
  * Arabic is the source language: the UI is written in Arabic, and when English is chosen this
  * file translates the rendered page (text, placeholders, labels) using the dictionary below,
  * flips the layout to left-to-right, and switches date/number formatting. Names, sites and
@@ -11,10 +11,10 @@
 
   const EN = {
     // brand & static pages
-    'الفكر السعد': 'Alfikr Alsaad',
-    'الفكر السعد · الحضور': 'Alfikr Alsaad · Attendance',
-    'الفكر السعد · لوحة التحكم': 'Alfikr Alsaad · Admin',
-    'الفكر السعد · نظام الحضور والانصراف': 'Alfikr Alsaad · Attendance system',
+    'الفكر الساعد': 'Alfikr Alsaad',
+    'الفكر الساعد · الحضور': 'Alfikr Alsaad · Attendance',
+    'الفكر الساعد · لوحة التحكم': 'Alfikr Alsaad · Admin',
+    'الفكر الساعد · نظام الحضور والانصراف': 'Alfikr Alsaad · Attendance system',
     'سجّل حضورك بلمسة واحدة': 'Check in with one tap',
     'تسجيل الدخول': 'Sign in',
     'أدخل رقم جوالك والرمز السري الذي زوّدك به المسؤول': 'Enter your mobile number and the PIN your manager gave you',
@@ -27,7 +27,7 @@
     'الرئيسية': 'Home',
     'سجلي': 'My log',
     'حسابي': 'Account',
-    'إدارة الحضور والموظفين — الفكر السعد': 'Attendance & staff management — Alfikr Alsaad',
+    'إدارة الحضور والموظفين — الفكر الساعد': 'Attendance & staff management — Alfikr Alsaad',
     'دخول المسؤول': 'Admin sign in',
     'أدخل كلمة مرور لوحة التحكم': 'Enter the dashboard password',
     'كلمة المرور': 'Password',

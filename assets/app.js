@@ -1,4 +1,4 @@
-/* الفكر السعد — employee app */
+/* الفكر الساعد — employee app */
 (function () {
   const F = window.Fikr;
   const $ = (s, el) => (el || document).querySelector(s);
@@ -607,7 +607,7 @@
         <div class="muted small">من قائمة المتصفح اختر «إضافة إلى الشاشة الرئيسية» للوصول السريع</div></div><img src="assets/logo.svg" width="40" height="40" alt=""></div>
       </div>
       <button class="btn soft-danger block" id="logoutBtn" style="margin-top:16px">${F.ICONS.logout.replace('<svg', '<svg width="20" height="20"')} تسجيل الخروج</button>
-      <p class="center tiny muted" style="margin-top:18px">الفكر السعد · نظام الحضور والانصراف</p>
+      <p class="center tiny muted" style="margin-top:18px">الفكر الساعد · نظام الحضور والانصراف</p>
     </div>`;
   }
 

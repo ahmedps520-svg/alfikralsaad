@@ -1,4 +1,4 @@
-/* الفكر السعد — shared helpers: API, formatting, UI primitives */
+/* الفكر الساعد — shared helpers: API, formatting, UI primitives */
 (function () {
   // ForgeBase project (https://forgebase.art). The anon key is browser-safe: every table is
   // locked by row-level security and all reads/writes go through the `api` edge function.
