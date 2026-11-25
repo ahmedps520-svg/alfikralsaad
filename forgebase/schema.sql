@@ -1,4 +1,4 @@
--- الفكر الساعد · ForgeBase (SQLite) schema
+-- الفكر الصاعد · ForgeBase (SQLite) schema
 -- Every table has row-level security ON with NO policies, so the public anon key
 -- cannot read or write anything directly. All access goes through the `api` edge
 -- function (forgebase/functions/api/index.js), which checks PINs, passwords and sessions.
@@ -7,7 +7,7 @@
 
 CREATE TABLE IF NOT EXISTS settings (
   id INTEGER PRIMARY KEY CHECK (id = 1),
-  company_name TEXT NOT NULL DEFAULT 'الفكر الساعد',
+  company_name TEXT NOT NULL DEFAULT 'الفكر الصاعد',
   timezone TEXT NOT NULL DEFAULT 'Asia/Riyadh',
   grace_minutes INTEGER NOT NULL DEFAULT 15,
   admin_pass_hash TEXT

@@ -56,7 +56,7 @@
   .app.admin { max-width: 980px; padding-bottom: 40px; }
   .admin-body .tabbar { top: 0; bottom: 0; left: auto; right: auto; inset-inline-start: 0; width: 250px; border-top: 0; border-inline-end: 1px solid var(--line); padding: 24px 14px; }
   .admin-body .tabbar-inner { flex-direction: column; gap: 6px; }
-  .admin-body .tabbar-inner::before { content: "الفكر الساعد"; font-weight: 700; font-size: 18px; padding: 0 12px 18px; color: var(--brand); }
+  .admin-body .tabbar-inner::before { content: "الفكر الصاعد"; font-weight: 700; font-size: 18px; padding: 0 12px 18px; color: var(--brand); }
   .admin-body .tab { flex: none; flex-direction: row; gap: 12px; font-size: 15px; padding: 12px 14px; justify-content: flex-start; }
   .admin-body .tab.active { background: color-mix(in srgb, var(--brand) 10%, transparent); }
   .admin-body .tab.active::after { display: none; }

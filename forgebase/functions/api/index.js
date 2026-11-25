@@ -1,4 +1,4 @@
-// الفكر الساعد — ForgeBase edge function `api`
+// الفكر الصاعد — ForgeBase edge function `api`
 // The website calls POST /functions/v1/api with { action, ...args }.
 // Tables are locked with row-level security (no policies), so this function is the
 // only way in. Employees sign in with phone number + PIN. Every check-in/out must carry
@@ -178,7 +178,7 @@ const randomPin = () => String(1000 + (crypto.getRandomValues(new Uint32Array(1)
 let settingsCache = null;
 async function settings(db, fresh = false) {
   if (!fresh && settingsCache && Date.now() - settingsCache.t < 30e3) return settingsCache.v;
-  const v = (await db.one('settings', 'id=eq.1&select=*')) || { company_name: 'الفكر الساعد', timezone: 'Asia/Riyadh', grace_minutes: 15 };
+  const v = (await db.one('settings', 'id=eq.1&select=*')) || { company_name: 'الفكر الصاعد', timezone: 'Asia/Riyadh', grace_minutes: 15 };
   settingsCache = { v, t: Date.now() };
   return v;
 }

@@ -1,4 +1,4 @@
-/* الفكر الساعد — tiny PDF builder.
+/* الفكر الصاعد — tiny PDF builder.
  * Turns photographed pages (JPEG) into one PDF on the phone: one page per photo, A4 width,
  * page height following the photo's shape. No external library needed.
  */

@@ -1,4 +1,4 @@
-# الفكر الساعد · نظام الحضور والانصراف
+# الفكر الصاعد · نظام الحضور والانصراف
 
 A simple, Arabic-first, phone-first attendance app. Employees confirm they arrived at work with one tap, and an admin dashboard shows who is in, late, absent, or gone home.
 

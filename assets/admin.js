@@ -1,4 +1,4 @@
-/* الفكر الساعد — admin dashboard */
+/* الفكر الصاعد — admin dashboard */
 (function () {
   const F = window.Fikr;
   const $ = (s, el) => (el || document).querySelector(s);
@@ -93,7 +93,7 @@
 
   /* ───────── TODAY ───────── */
   async function loadToday(force) {
-    if (!state.overview || force !== true) view(hero('لوحة اليوم', state.company || 'الفكر الساعد') + skeleton());
+    if (!state.overview || force !== true) view(hero('لوحة اليوم', state.company || 'الفكر الصاعد') + skeleton());
     try {
       const o = await call('alfikr_admin_overview', { p_date: state.date });
       state.overview = o; state.tz = o.timezone; state.company = o.company;
@@ -395,7 +395,7 @@
     const text = F.lang === 'en'
       ? `Hello ${name}\nAttendance link: ${link}\nMobile number: ${phone}\nPIN: ${pin}`
       : `مرحباً ${name}\nرابط تسجيل الحضور: ${link}\nرقم الجوال: ${phone}\nالرمز السري: ${pin}`;
-    if (navigator.share) navigator.share({ title: F.T('الفكر الساعد'), text }).catch(() => {});
+    if (navigator.share) navigator.share({ title: F.T('الفكر الصاعد'), text }).catch(() => {});
     else window.open('https://wa.me/?text=' + encodeURIComponent(text), '_blank');
   }
   function loginCard(name, phone, pin) {
